@@ -1,0 +1,92 @@
+package com.example.atlasai
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
+/** Все тексты интерфейса и ответов Атласа: (English to Русский). */
+object Tr {
+    var lang by mutableStateOf("en")
+    val ru: Boolean get() = lang == "ru"
+
+    fun s(key: String): String {
+        val p = M[key] ?: return key
+        return if (ru) p.second else p.first
+    }
+
+    private val M: Map<String, Pair<String, String>> = mapOf(
+        "choose" to ("Choose your language" to "Выберите язык"),
+        "settings" to ("Settings" to "Настройки"),
+        "greeting" to ("Good day, %s. Atlas at your service. How may I help?" to "Добрый день, %s. Атлас к вашим услугам. Чем могу помочь?"),
+        "need_net" to ("That requires an internet connection, and I am offline at the moment." to "Для этого нужен интернет, а сейчас я офлайн."),
+        "no_key" to ("I need a Google Gemini key for full intelligence. Add it in Settings." to "Для полного интеллекта мне нужен ключ Google Gemini. Добавьте его в настройках."),
+        "error" to ("Something went wrong:" to "Что-то пошло не так:"),
+        "image_ready" to ("Your image is ready." to "Ваше изображение готово."),
+        "too_big" to ("A file is too large (limit 15 MB)." to "Файл слишком большой (лимит 15 МБ)."),
+        "no_stt" to ("Speech recognition is not available on this device." to "Распознавание речи недоступно на этом устройстве."),
+        "stt_err" to ("I could not hear you. Please try again." to "Я вас не расслышал. Попробуйте ещё раз."),
+        "perm" to ("I need permission for that. Please allow it in Android settings." to "Мне нужно разрешение. Включите его в настройках Android."),
+        "flash_on" to ("Flashlight on." to "Фонарик включён."),
+        "flash_off" to ("Flashlight off." to "Фонарик выключен."),
+        "flash_fail" to ("I could not reach the flashlight." to "Не удалось получить доступ к фонарику."),
+        "yt_open" to ("Opening YouTube." to "Открываю YouTube."),
+        "yt_search" to ("Searching YouTube for \"%s\"." to "Ищу на YouTube: «%s»."),
+        "timer_set" to ("Timer set for %s." to "Таймер установлен на %s."),
+        "timer_off" to ("Timer cancelled." to "Таймер отменён."),
+        "alarm_set" to ("Alarm set for %s." to "Будильник установлен на %s."),
+        "alarm_show" to ("Here are your alarms." to "Вот ваши будильники."),
+        "calling" to ("Calling %s." to "Звоню: %s."),
+        "call_nf" to ("I could not find that contact." to "Не нашёл такой контакт."),
+        "sms_sent" to ("Message sent to %s." to "Сообщение отправлено: %s."),
+        "sms_fail" to ("The message could not be sent." to "Не удалось отправить сообщение."),
+        "app_open" to ("Opening %s." to "Открываю: %s."),
+        "thinking" to ("Thinking..." to "Думаю..."),
+        "listening" to ("Listening... tap to stop" to "Слушаю... нажмите, чтобы остановить"),
+        "tap_mic" to ("Tap the microphone and speak" to "Нажмите на микрофон и говорите"),
+        "type_hint" to ("Message Atlas" to "Сообщение Атласу"),
+        "next" to ("Next" to "Далее"),
+        "back" to ("Back" to "Назад"),
+        "finish" to ("Finish" to "Готово"),
+        "open_page" to ("Open Google AI Studio" to "Открыть Google AI Studio"),
+        "key_hint" to ("Paste your Google key" to "Вставьте ключ Google"),
+        "name_title" to ("What is your name?" to "Как вас зовут?"),
+        "name_hint" to ("Your name" to "Ваше имя"),
+        "mode_title" to ("How do you want to talk to me?" to "Как вы хотите общаться со мной?"),
+        "mode_voice" to ("Speak" to "Говорить"),
+        "mode_text" to ("Write" to "Писать"),
+        "mode_note" to ("You can change this any time in Settings." to "Это всегда можно изменить в настройках."),
+        "start" to ("Start" to "Начать"),
+        "s_input" to ("Voice input (off = typing)" to "Голосовой ввод (выкл = текст)"),
+        "s_speak" to ("Read answers aloud" to "Озвучивать ответы"),
+        "s_lang" to ("Language" to "Язык"),
+        "s_name" to ("Your name" to "Ваше имя"),
+        "s_buttons" to ("Actions" to "Действия"),
+        "b_key" to ("Change Google key" to "Изменить ключ Google"),
+        "b_test" to ("Test voice" to "Проверить голос"),
+        "b_clear" to ("Clear chat" to "Очистить чат"),
+        "b_tut" to ("Show tutorial again" to "Показать обучение снова"),
+        "b_reset" to ("Reset everything" to "Сбросить всё"),
+        "test_phrase" to ("All systems are online." to "Все системы в норме."),
+        "save" to ("Save" to "Сохранить"),
+        "cancel" to ("Cancel" to "Отмена"),
+        "attached" to ("Attached" to "Прикреплено"),
+        "t1t" to ("Meet Atlas" to "Знакомьтесь: Атлас"),
+        "t1b" to ("I am Atlas, your personal AI assistant in the spirit of J.A.R.V.I.S. I talk with you, answer questions and operate your phone. This tutorial has 9 short steps." to "Я Атлас, ваш личный ИИ-ассистент в духе Джарвиса. Я общаюсь с вами, отвечаю на вопросы и управляю телефоном. В этом обучении 9 коротких шагов."),
+        "t2t" to ("What I can do" to "Что я умею"),
+        "t2b" to ("Answer any question and hold a conversation, open YouTube, turn the flashlight on and off, set timers and alarms, call contacts, send text messages, open apps and generate pictures." to "Отвечать на любые вопросы и поддерживать беседу, открывать YouTube, включать и выключать фонарик, ставить таймеры и будильники, звонить контактам, писать сообщения, открывать приложения и создавать картинки."),
+        "t3t" to ("Online and offline" to "С интернетом и без"),
+        "t3b" to ("With internet I search the web and use the full power of Google Gemini. Without internet I still chat, tell the time, do math and control the phone, but web search, pictures and attachments are unavailable." to "С интернетом я ищу информацию в сети и использую всю мощь Google Gemini. Без интернета я всё равно болтаю, говорю время, считаю и управляю телефоном, но поиск, картинки и вложения недоступны."),
+        "t4t" to ("Permissions" to "Разрешения"),
+        "t4b" to ("To call, text and listen I need access to the microphone, phone, SMS and contacts. I will ask once, and you can change it anytime in Android settings." to "Чтобы звонить, писать и слушать, мне нужен доступ к микрофону, телефону, SMS и контактам. Я спрошу один раз, а изменить можно в настройках Android."),
+        "t5t" to ("Google key: step 1" to "Ключ Google: шаг 1"),
+        "t5b" to ("The key lets me think with Google Gemini. It is free. Tap the button below and sign in to your Google account on the page that opens." to "Ключ позволяет мне думать с помощью Google Gemini. Он бесплатный. Нажмите кнопку ниже и войдите в свой аккаунт Google на открывшейся странице."),
+        "t6t" to ("Google key: step 2" to "Ключ Google: шаг 2"),
+        "t6b" to ("On the page press \"Create API key\". If asked, choose or create a project and wait a few seconds." to "На странице нажмите «Create API key». Если попросят, выберите или создайте проект и подождите пару секунд."),
+        "t7t" to ("Google key: step 3" to "Ключ Google: шаг 3"),
+        "t7b" to ("Copy the long key that starts with \"AIza\" using the copy icon next to it." to "Скопируйте длинный ключ, который начинается с «AIza», значком копирования рядом с ним."),
+        "t8t" to ("Talk or type" to "Говорить или писать"),
+        "t8b" to ("You choose: speak to me or type. I reply in writing and read my answers aloud. You can attach photos, video, audio and MP3 files. Everything can be changed in Settings (menu with three dots, then Settings)." to "Выбор за вами: говорите или пишите. Я отвечаю текстом и озвучиваю ответы. Можно прикреплять фото, видео, аудио и MP3. Всё меняется в настройках (три точки сверху, затем «Настройки»)."),
+        "t9t" to ("Paste your key" to "Вставьте ключ"),
+        "t9b" to ("Paste the key here. You can skip this and add it later in Settings, but without it I work only offline." to "Вставьте ключ сюда. Можно пропустить и добавить позже в настройках, но без него я работаю только офлайн.")
+    )
+}
