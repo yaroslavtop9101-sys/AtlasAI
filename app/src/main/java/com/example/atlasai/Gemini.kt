@@ -5,20 +5,54 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Ошибка, которую вернул сам API (неверный ключ, лимит и т.п.). */
-class ApiException(message: String) : Exception(message)
+/**
+ * Ошибка API. code: HTTP-код (0 = локальная ошибка приложения),
+ * retryMs: сколько ждать по подсказке Google, daily: дневной лимит, unavailable: лимит равен нулю.
+ */
+class ApiException(
+    val code: Int,
+    message: String,
+    val retryMs: Long = 0,
+    val daily: Boolean = false,
+    val unavailable: Boolean = false
+) : Exception(message)
 
 /** Клиент Google Gemini через REST. Вызывать только не из главного потока. */
 object Gemini {
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
-    private const val CHAT_MODEL = "gemini-3.8-flash"
     private const val IMAGE_MODEL = "gemini-3.1-flash-image"
 
     class Attachment(val mime: String, val b64: String)
+
+    private fun apiError(code: Int, json: JSONObject): ApiException {
+        val err = json.optJSONObject("error")
+        val msg = err?.optString("message", "") ?: ""
+        var retry = 0L
+        var daily = msg.contains("per day", true) || msg.contains("PerDay", true)
+        val details = err?.optJSONArray("details")
+        if (details != null) {
+            for (i in 0 until details.length()) {
+                val d = details.optJSONObject(i) ?: continue
+                val delay = d.optString("retryDelay", "")
+                if (delay.isNotBlank()) {
+                    Regex("[0-9.]+").find(delay)?.value?.toDoubleOrNull()?.let { retry = (it * 1000).toLong() }
+                }
+                val v = d.optJSONArray("violations")
+                if (v != null) {
+                    for (j in 0 until v.length()) {
+                        val o = v.optJSONObject(j) ?: continue
+                        val id = o.optString("quotaId", "") + o.optString("quotaMetric", "")
+                        if (id.contains("PerDay", true)) daily = true
+                    }
+                }
+            }
+        }
+        val unavailable = msg.contains("limit: 0")
+        return ApiException(code, msg.ifBlank { "HTTP $code" }, retry, daily, unavailable)
+    }
 
     private fun post(model: String, key: String, body: JSONObject): JSONObject {
         val c = URL("$BASE$model:generateContent").openConnection() as HttpURLConnection
@@ -36,11 +70,9 @@ object Gemini {
             val json = try {
                 JSONObject(text)
             } catch (e: Exception) {
-                throw ApiException("HTTP $code")
+                throw ApiException(code, "HTTP $code")
             }
-            if (code !in 200..299) {
-                throw ApiException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
-            }
+            if (code !in 200..299) throw apiError(code, json)
             return json
         } finally {
             c.disconnect()
@@ -49,7 +81,15 @@ object Gemini {
 
     private fun textPart(t: String) = JSONObject().put("text", t)
 
-    fun chat(key: String, system: String, history: List<Msg>, text: String, atts: List<Attachment>): String {
+    fun chat(
+        key: String,
+        model: String,
+        system: String,
+        history: List<Msg>,
+        text: String,
+        atts: List<Attachment>,
+        search: Boolean
+    ): String {
         val contents = JSONArray()
         for (m in history.takeLast(20)) {
             if (m.text.isBlank()) continue
@@ -73,9 +113,11 @@ object Gemini {
         val body = JSONObject()
             .put("contents", contents)
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(textPart(system))))
-            .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+        if (search) {
+            body.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+        }
 
-        val res = post(CHAT_MODEL, key, body)
+        val res = post(model, key, body)
         val out = StringBuilder()
         val ps = res.optJSONArray("candidates")?.optJSONObject(0)
             ?.optJSONObject("content")?.optJSONArray("parts")
@@ -84,7 +126,7 @@ object Gemini {
         }
         if (out.isBlank()) {
             val reason = res.optJSONObject("promptFeedback")?.optString("blockReason") ?: ""
-            throw ApiException(if (reason.isNotBlank()) reason else "empty response")
+            throw ApiException(0, if (reason.isNotBlank()) reason else "empty response")
         }
         return out.toString().trim()
     }
@@ -103,7 +145,7 @@ object Gemini {
         val res = post(IMAGE_MODEL, key, body)
         val ps = res.optJSONArray("candidates")?.optJSONObject(0)
             ?.optJSONObject("content")?.optJSONArray("parts")
-            ?: throw ApiException("empty response")
+            ?: throw ApiException(0, "empty response")
         var caption = ""
         var bmp: Bitmap? = null
         for (i in 0 until ps.length()) {
@@ -115,7 +157,7 @@ object Gemini {
                 bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             }
         }
-        if (bmp == null) throw ApiException("no image returned")
+        if (bmp == null) throw ApiException(0, "no image returned")
         return caption.trim() to bmp
     }
 }

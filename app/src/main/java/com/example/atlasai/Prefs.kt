@@ -15,6 +15,8 @@ class Prefs(ctx: Context) {
     private var _onboarded by mutableStateOf(sp.getBoolean("onboarded", false))
     private var _voiceInput by mutableStateOf(sp.getBoolean("voiceInput", true))
     private var _speak by mutableStateOf(sp.getBoolean("speak", true))
+    private var _model by mutableStateOf(sp.getString("model", "auto") ?: "auto")
+    private var _imageBlocked by mutableStateOf(sp.getBoolean("imageBlocked", false))
 
     init {
         if (_lang.isNotBlank()) Tr.lang = _lang
@@ -38,6 +40,7 @@ class Prefs(ctx: Context) {
     var key: String
         get() = _key
         set(v) {
+            if (v.trim() != _key) imageBlocked = false
             _key = v.trim()
             sp.edit().putString("key", v.trim()).apply()
         }
@@ -63,9 +66,24 @@ class Prefs(ctx: Context) {
             sp.edit().putBoolean("speak", v).apply()
         }
 
+    var model: String
+        get() = _model
+        set(v) {
+            _model = v
+            sp.edit().putString("model", v).apply()
+        }
+
+    /** Google не пустил к картинкам с этим ключом — больше не пробуем, пока ключ не сменится. */
+    var imageBlocked: Boolean
+        get() = _imageBlocked
+        set(v) {
+            _imageBlocked = v
+            sp.edit().putBoolean("imageBlocked", v).apply()
+        }
+
     fun resetAll() {
         sp.edit().clear().apply()
         _lang = ""; _name = ""; _key = ""; _onboarded = false
-        _voiceInput = true; _speak = true
+        _voiceInput = true; _speak = true; _model = "auto"; _imageBlocked = false
     }
 }

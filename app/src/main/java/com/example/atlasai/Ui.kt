@@ -6,11 +6,14 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,11 +38,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +59,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -72,12 +81,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private val Cyan = Color(0xFF00E5FF)
 private val Bg = Color(0xFF05080F)
@@ -124,7 +139,8 @@ fun AtlasApp(prefs: Prefs, voice: Voice) {
             onTutorial = { screen = "tutorial" },
             onReset = { brain.messages.clear(); prefs.resetAll(); screen = "lang" }
         )
-        else -> ChatScreen(brain, prefs, voice) { screen = "settings" }
+        "history" -> HistoryScreen(brain, onBack = { screen = "chat" }, onOpened = { screen = "chat" })
+        else -> ChatScreen(brain, prefs, voice, onSettings = { screen = "settings" }, onHistory = { screen = "history" })
     }
 }
 
@@ -233,6 +249,7 @@ fun SetupScreen(prefs: Prefs, onDone: () -> Unit) {
             value = name,
             onValueChange = { name = it },
             label = { Text(Tr.s("name_hint")) },
+            supportingText = { Text(Tr.s("name_short")) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -253,7 +270,7 @@ fun SetupScreen(prefs: Prefs, onDone: () -> Unit) {
                 prefs.onboarded = true
                 onDone()
             },
-            enabled = name.isNotBlank(),
+            enabled = name.trim().length >= 2,
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text(Tr.s("start"), fontSize = 18.sp) }
     }
@@ -272,7 +289,7 @@ private fun ModeButton(label: String, selected: Boolean, modifier: Modifier, onC
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit) {
+fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit, onHistory: () -> Unit) {
     val ctx = LocalContext.current
     var input by remember { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
@@ -280,6 +297,14 @@ fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit)
     var menu by remember { mutableStateOf(false) }
     val picked = remember { mutableStateListOf<Uri>() }
     val list = rememberLazyListState()
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val wait: Long? = if (now > 0) Limits.minWait(prefs.model) else null
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { picked.addAll(it) }
@@ -330,10 +355,23 @@ fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit)
                 title = { Text("ATLAS", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 4.sp) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg),
                 actions = {
+                    IconButton(onClick = { voice.stopSpeaking() }) {
+                        Icon(Icons.Default.VolumeOff, contentDescription = Tr.s("stop_voice"), tint = Color.White)
+                    }
                     IconButton(onClick = { menu = true }) {
                         Icon(Icons.Default.MoreVert, contentDescription = null, tint = Color.White)
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(Tr.s("new_chat")) },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                            onClick = { menu = false; brain.newChat() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(Tr.s("history")) },
+                            leadingIcon = { Icon(Icons.Default.History, contentDescription = null) },
+                            onClick = { menu = false; onHistory() }
+                        )
                         DropdownMenuItem(
                             text = { Text(Tr.s("settings")) },
                             leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
@@ -355,6 +393,15 @@ fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit)
                 if (brain.busy) {
                     item { Text(Tr.s("thinking"), color = Cyan, fontSize = 14.sp) }
                 }
+            }
+            if (wait == null || wait > 0) {
+                Text(
+                    if (wait == null) Tr.s(if (prefs.model == "auto") "all_dead" else "model_dead")
+                    else String.format(Tr.s("limit_banner"), Limits.fmt(wait)),
+                    color = Color(0xFFFFB74D),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
             }
             if (picked.isNotEmpty()) {
                 Text(
@@ -408,6 +455,8 @@ fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit)
 
 @Composable
 private fun Bubble(m: Msg) {
+    val clip = LocalClipboardManager.current
+    val ctx = LocalContext.current
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (m.fromUser) Arrangement.End else Arrangement.Start
@@ -415,7 +464,13 @@ private fun Bubble(m: Msg) {
         Surface(
             color = if (m.fromUser) UserBubble else Panel,
             shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.widthIn(max = 320.dp).combinedClickable(
+                onClick = {},
+                onLongClick = {
+                    clip.setText(AnnotatedString(m.text))
+                    Toast.makeText(ctx, Tr.s("copied"), Toast.LENGTH_SHORT).show()
+                }
+            )
         ) {
             Column(Modifier.padding(12.dp)) {
                 if (m.files.isNotEmpty()) {
@@ -492,9 +547,25 @@ fun SettingsScreen(
                 OutlinedTextField(
                     value = prefs.name,
                     onValueChange = { prefs.name = it },
+                    supportingText = { if (prefs.name.trim().length < 2) Text(Tr.s("name_short")) },
                     singleLine = true,
                     modifier = Modifier.width(170.dp)
                 )
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Text(Tr.s("model_title"), color = Cyan, fontWeight = FontWeight.Bold)
+            Surface(color = Panel, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 6.dp)) {
+                    ModelOption(Tr.s("auto"), "", prefs.model == "auto" || Limits.MODELS.none { it.id == prefs.model }) {
+                        prefs.model = "auto"
+                    }
+                    for (m in Limits.MODELS) {
+                        ModelOption(m.title, String.format(Tr.s("per_min"), m.rpm), prefs.model == m.id) {
+                            prefs.model = m.id
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(4.dp))
@@ -546,4 +617,92 @@ private fun GearRow(label: String, control: @Composable () -> Unit) {
 @Composable
 private fun SettingsButton(label: String, onClick: () -> Unit) {
     OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(label) }
+}
+
+// ---------- История чатов ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HistoryScreen(brain: Brain, onBack: () -> Unit, onOpened: () -> Unit) {
+    BackHandler(onBack = onBack)
+    var renaming by remember { mutableStateOf<Chat?>(null) }
+    var newTitle by remember { mutableStateOf("") }
+    val fmt = remember { SimpleDateFormat("d MMM, HH:mm", if (Tr.ru) Locale("ru") else Locale.US) }
+
+    Scaffold(
+        containerColor = Bg,
+        topBar = {
+            TopAppBar(
+                title = { Text(Tr.s("history"), color = Color.White) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg),
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Color.White)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { brain.newChat(); onOpened() }) {
+                        Icon(Icons.Default.Add, contentDescription = Tr.s("new_chat"), tint = Cyan)
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        if (brain.chats.isEmpty()) {
+            Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(Tr.s("history_empty"), color = Color(0xFF8CA0B5))
+            }
+        } else {
+            LazyColumn(
+                Modifier.padding(pad).fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(brain.chats.toList()) { c ->
+                    Surface(color = Panel, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(
+                                Modifier.weight(1f).clickable { brain.open(c.id); onOpened() }.padding(vertical = 14.dp)
+                            ) {
+                                Text(c.title, color = Color.White, fontSize = 16.sp, maxLines = 1)
+                                Text(fmt.format(Date(c.updated)), color = Color(0xFF8CA0B5), fontSize = 12.sp)
+                            }
+                            IconButton(onClick = { renaming = c; newTitle = c.title }) {
+                                Icon(Icons.Default.Edit, contentDescription = Tr.s("rename"), tint = Cyan)
+                            }
+                            IconButton(onClick = { brain.delete(c.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = Tr.s("delete"), tint = Color(0xFFE57373))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    renaming?.let { c ->
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text(Tr.s("rename")) },
+            text = { OutlinedTextField(value = newTitle, onValueChange = { newTitle = it }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = { brain.rename(c.id, newTitle); renaming = null }) { Text(Tr.s("save")) }
+            },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text(Tr.s("cancel")) } }
+        )
+    }
+}
+
+@Composable
+private fun ModelOption(title: String, note: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color.White)
+            if (note.isNotBlank()) Text(note, color = Color(0xFF8CA0B5), fontSize = 12.sp)
+        }
+    }
 }
