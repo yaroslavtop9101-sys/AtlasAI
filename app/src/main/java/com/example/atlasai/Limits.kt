@@ -84,18 +84,18 @@ object Limits {
     }
 }
 
-/** Решает, нужен ли поиск Google и можно ли ответить локально. */
+/** Простые проверки фразы. Смысл целиком оценивает модель Google, а не эти правила. */
 object Router {
-    private val FRESH = listOf(
-        "погод", "новост", "курс", "сегодня", "сейчас", "последн", "счёт", "счет", "матч", "цена", "цены", "стоит",
-        "weather", "news", "today", "right now", "latest", "score", "price", "stock", "exchange rate", "currently"
+    private val NEG = setOf(
+        "не", "без", "нельзя", "никогда", "don't", "dont", "not", "never", "no", "without", "doesn't", "didn't"
     )
 
-    fun needsSearch(t: String): Boolean {
-        val l = t.lowercase()
-        return FRESH.any { l.contains(it) }
+    /** Есть ли в фразе отрицание. Тогда правила не срабатывают, решает модель. */
+    fun hasNegation(t: String): Boolean {
+        val words = t.lowercase().replace('’', '\'').split(Regex("[\\s,!.?;:]+")).filter { it.isNotEmpty() }
+        return words.any { it in NEG }
     }
 
-    /** Короткие фразы можно сначала попробовать ответить локально. */
-    fun isShort(t: String): Boolean = t.trim().split(Regex("\\s+")).size <= 5
+    /** Короткие фразы можно сначала попробовать выполнить простыми правилами. */
+    fun isShort(t: String): Boolean = t.trim().split(Regex("\\s+")).size <= 6
 }

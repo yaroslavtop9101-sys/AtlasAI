@@ -81,6 +81,35 @@ object Gemini {
 
     private fun textPart(t: String) = JSONObject().put("text", t)
 
+    class FunctionCall(val name: String, val args: JSONObject)
+    class Reply(val text: String, val call: FunctionCall?)
+
+    /** NONE: чистый ответ; ACTIONS: команды телефона; ACTIONS_WEB: команды и вызов поиска; SEARCH: поиск Google. */
+    enum class Tools { NONE, ACTIONS, ACTIONS_WEB, SEARCH }
+
+    private fun prop(type: String, desc: String) = JSONObject().put("type", type).put("description", desc)
+
+    private fun fn(name: String, desc: String, props: JSONObject, required: List<String>): JSONObject {
+        val params = JSONObject().put("type", "object").put("properties", props)
+        if (required.isNotEmpty()) params.put("required", JSONArray(required))
+        return JSONObject().put("name", name).put("description", desc).put("parameters", params)
+    }
+
+    private fun declarations(web: Boolean): JSONObject {
+        val f = JSONArray()
+        f.put(fn("flashlight", "Turn the phone flashlight on or off.", JSONObject().put("on", prop("boolean", "true to turn on, false to turn off")), listOf("on")))
+        f.put(fn("open_youtube", "Open YouTube, or search YouTube for a video or music.", JSONObject().put("query", prop("string", "what to search for; empty to just open the app")), emptyList()))
+        f.put(fn("call", "Call a contact or a phone number.", JSONObject().put("target", prop("string", "contact name or phone number")), listOf("target")))
+        f.put(fn("send_sms", "Send a text message (SMS) to a contact or number.", JSONObject().put("recipient", prop("string", "contact name or phone number")).put("text", prop("string", "the message text")), listOf("recipient", "text")))
+        f.put(fn("set_timer", "Start a countdown timer.", JSONObject().put("seconds", prop("integer", "duration in seconds")), listOf("seconds")))
+        f.put(fn("set_alarm", "Set an alarm clock for a time of day.", JSONObject().put("hour", prop("integer", "hour 0-23")).put("minute", prop("integer", "minute 0-59")), listOf("hour", "minute")))
+        f.put(fn("open_app", "Open an app installed on the phone.", JSONObject().put("name", prop("string", "app name")), listOf("name")))
+        if (web) {
+            f.put(fn("web_search", "Search the web for live information: weather, news, prices, scores, recent events. Call it only when live data is truly needed and the user has not forbidden using the internet.", JSONObject().put("query", prop("string", "what to look up")), listOf("query")))
+        }
+        return JSONObject().put("function_declarations", f)
+    }
+
     fun chat(
         key: String,
         model: String,
@@ -88,8 +117,8 @@ object Gemini {
         history: List<Msg>,
         text: String,
         atts: List<Attachment>,
-        search: Boolean
-    ): String {
+        tools: Tools
+    ): Reply {
         val contents = JSONArray()
         for (m in history.takeLast(20)) {
             if (m.text.isBlank()) continue
@@ -113,22 +142,33 @@ object Gemini {
         val body = JSONObject()
             .put("contents", contents)
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(textPart(system))))
-        if (search) {
-            body.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+        when (tools) {
+            Tools.SEARCH -> body.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+            Tools.ACTIONS -> body.put("tools", JSONArray().put(declarations(false)))
+            Tools.ACTIONS_WEB -> body.put("tools", JSONArray().put(declarations(true)))
+            Tools.NONE -> {}
         }
 
         val res = post(model, key, body)
         val out = StringBuilder()
+        var call: FunctionCall? = null
         val ps = res.optJSONArray("candidates")?.optJSONObject(0)
             ?.optJSONObject("content")?.optJSONArray("parts")
         if (ps != null) {
-            for (i in 0 until ps.length()) out.append(ps.getJSONObject(i).optString("text", ""))
+            for (i in 0 until ps.length()) {
+                val part = ps.getJSONObject(i)
+                out.append(part.optString("text", ""))
+                val fc = part.optJSONObject("functionCall")
+                if (fc != null && call == null) {
+                    call = FunctionCall(fc.optString("name"), fc.optJSONObject("args") ?: JSONObject())
+                }
+            }
         }
-        if (out.isBlank()) {
+        if (out.isBlank() && call == null) {
             val reason = res.optJSONObject("promptFeedback")?.optString("blockReason") ?: ""
             throw ApiException(0, if (reason.isNotBlank()) reason else "empty response")
         }
-        return out.toString().trim()
+        return Reply(out.toString().trim(), call)
     }
 
     /** Возвращает подпись и картинку. */

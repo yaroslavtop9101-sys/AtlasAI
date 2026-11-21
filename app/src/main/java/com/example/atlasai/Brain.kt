@@ -151,20 +151,15 @@ class Brain(
     private fun compute(text: String, uris: List<Uri>, history: List<Msg>): Msg {
         try {
             val name = displayName()
-            if (uris.isEmpty()) {
+            val neg = Router.hasNegation(text)
+            // Короткая ясная команда без отрицания: выполняем сразу, без Google и без лимитов
+            if (uris.isEmpty() && !neg && Router.isShort(text)) {
                 actions.tryHandle(text)?.let { return Msg(false, it) }
-                if (Router.isShort(text)) Offline.match(text, name)?.let { return Msg(false, it) }
+                Offline.match(text, name)?.let { return Msg(false, it) }
             }
             val on = online()
-            if (uris.isEmpty() && actions.isImageRequest(text.lowercase())) return image(text, on)
-            if (!on) {
-                return if (uris.isNotEmpty()) Msg(false, Tr.s("need_net"))
-                else Msg(false, Offline.reply(text, name, false))
-            }
-            if (prefs.key.isBlank()) {
-                val base = if (uris.isEmpty()) Offline.reply(text, name, false) + "\n\n" else ""
-                return Msg(false, base + Tr.s("no_key"))
-            }
+            if (!prefs.internet || !on || prefs.key.isBlank()) return offlineMsg(text, uris, name, on, neg)
+            if (uris.isEmpty() && !neg && actions.isImageRequest(text.lowercase())) return image(text, on)
             val atts = uris.mapNotNull { load(it) }
             return google(text, atts, history, name)
         } catch (e: ApiException) {
@@ -172,6 +167,19 @@ class Brain(
         } catch (e: Exception) {
             return Msg(false, Tr.s("error") + " " + (e.message ?: ""))
         }
+    }
+
+    /** Ответ без Google: интернет выключен вручную, нет сети или нет ключа. */
+    private fun offlineMsg(text: String, uris: List<Uri>, name: String, on: Boolean, neg: Boolean): Msg {
+        if (uris.isEmpty() && !neg) actions.tryHandle(text)?.let { return Msg(false, it) }
+        val reason = when {
+            !prefs.internet -> "internet_off"
+            !on -> "need_net"
+            else -> "no_key"
+        }
+        if (uris.isNotEmpty() || (!neg && actions.isImageRequest(text.lowercase()))) return Msg(false, Tr.s(reason))
+        val base = Offline.reply(text, name, false)
+        return Msg(false, if (reason == "no_key") base + "\n\n" + Tr.s("no_key") else base)
     }
 
     private fun image(text: String, on: Boolean): Msg {
@@ -205,7 +213,7 @@ class Brain(
                 if (!auto && w <= 20_000) Thread.sleep(w) else continue
             }
             try {
-                return Msg(false, ask(id, text, atts, history, name))
+                return ask(id, text, atts, history, name)
             } catch (e: ApiException) {
                 val msg = (e.message ?: "").lowercase()
                 when {
@@ -233,20 +241,39 @@ class Brain(
         return limited(text, atts.isNotEmpty(), name, last)
     }
 
-    /** Один запрос к модели. Поиск включается только для свежих данных и отключается, если Google его не принимает. */
-    private fun ask(id: String, text: String, atts: List<Gemini.Attachment>, history: List<Msg>, name: String): String {
-        var search = Router.needsSearch(text) && !Limits.searchBlocked()
-        while (true) {
-            Limits.record(id)
-            try {
-                return Gemini.chat(prefs.key, id, system(name, search), history, text, atts, search)
-            } catch (e: ApiException) {
-                val s = (e.message ?: "").lowercase()
-                val searchIssue = search && (e.code == 400 || e.code == 403 || s.contains("search") || s.contains("grounding"))
-                if (!searchIssue) throw e
+    /**
+     * Один запрос к модели. По смыслу всей фразы модель сама решает: ответить текстом, вызвать команду
+     * телефона или запросить поиск (web_search). Режим поиска «Всегда» идёт сразу в поиск, «Выкл» поиск не предлагает.
+     */
+    private fun ask(id: String, text: String, atts: List<Gemini.Attachment>, history: List<Msg>, name: String): Msg {
+        val searchOk = prefs.searchMode != "off" && !Limits.searchBlocked()
+        if (prefs.searchMode == "always" && searchOk) return Msg(false, grounded(id, text, atts, history, name))
+        Limits.record(id)
+        val r = Gemini.chat(
+            prefs.key, id, system(name, searchOk), history, text, atts,
+            if (searchOk) Gemini.Tools.ACTIONS_WEB else Gemini.Tools.ACTIONS
+        )
+        val c = r.call
+        if (c != null) {
+            if (c.name == "web_search") return Msg(false, grounded(id, text, atts, history, name))
+            return Msg(false, actions.run(c.name, c.args))
+        }
+        return Msg(false, r.text)
+    }
+
+    /** Ответ с поиском Google. Если Google поиск не принимает, запоминаем это на час и отвечаем без него. */
+    private fun grounded(id: String, text: String, atts: List<Gemini.Attachment>, history: List<Msg>, name: String): String {
+        Limits.record(id)
+        try {
+            return Gemini.chat(prefs.key, id, system(name, true), history, text, atts, Gemini.Tools.SEARCH).text
+        } catch (e: ApiException) {
+            val s = (e.message ?: "").lowercase()
+            if (e.code == 400 || e.code == 403 || s.contains("search") || s.contains("grounding")) {
                 Limits.blockSearch(3_600_000L)
-                search = false
+                Limits.record(id)
+                return Gemini.chat(prefs.key, id, system(name, false), history, text, atts, Gemini.Tools.NONE).text
             }
+            throw e
         }
     }
 
@@ -281,9 +308,12 @@ class Brain(
             "Always address the user by name: $name. " +
             "Reply ONLY in $language. Keep answers concise and conversational. " +
             "Do not use markdown, asterisks or emoji, because your answers may be read aloud. " +
-            (if (search) "You can use web search for current facts. "
-            else "You have no live internet access in this reply. If the user asks for live data such as weather, news or prices, say honestly that you cannot check it right now. ") +
-            "Phone actions such as calls, texts, flashlight, YouTube, timers and image generation are executed by the app itself when the user asks."
+            "Understand the meaning of the user's whole sentence, not single words. " +
+            "You can perform phone actions by calling the provided functions, but only when the user clearly asks " +
+            "you to do it right now. Never perform an action the user told you not to do. " +
+            (if (search) "If you need live information such as weather, news, prices or scores, call web_search; " +
+                "never call it if the user asked you not to use the internet. "
+            else "You have no live internet access in this reply. If the user asks for live data such as weather, news or prices, say honestly that you cannot check it right now. ")
     }
 
     private fun load(u: Uri): Gemini.Attachment? {

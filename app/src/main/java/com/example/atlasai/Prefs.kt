@@ -17,6 +17,8 @@ class Prefs(ctx: Context) {
     private var _speak by mutableStateOf(sp.getBoolean("speak", true))
     private var _model by mutableStateOf(sp.getString("model", "auto") ?: "auto")
     private var _imageBlocked by mutableStateOf(sp.getBoolean("imageBlocked", false))
+    private var _internet by mutableStateOf(sp.getBoolean("internet", true))
+    private var _searchMode by mutableStateOf(sp.getString("searchMode", "auto") ?: "auto")
 
     init {
         if (_lang.isNotBlank()) Tr.lang = _lang
@@ -81,9 +83,25 @@ class Prefs(ctx: Context) {
             sp.edit().putBoolean("imageBlocked", v).apply()
         }
 
+    /** Ручной выключатель интернета для Атласа: выкл = Google не используется вообще. */
+    var internet: Boolean
+        get() = _internet
+        set(v) {
+            _internet = v
+            sp.edit().putBoolean("internet", v).apply()
+        }
+
+    /** auto: модель решает сама; always: всегда с поиском; off: без поиска. */
+    var searchMode: String
+        get() = _searchMode
+        set(v) {
+            _searchMode = v
+            sp.edit().putString("searchMode", v).apply()
+        }
+
     fun resetAll() {
         sp.edit().clear().apply()
         _lang = ""; _name = ""; _key = ""; _onboarded = false
-        _voiceInput = true; _speak = true; _model = "auto"; _imageBlocked = false
+        _voiceInput = true; _speak = true; _model = "auto"; _imageBlocked = false; _internet = true; _searchMode = "auto"
     }
 }

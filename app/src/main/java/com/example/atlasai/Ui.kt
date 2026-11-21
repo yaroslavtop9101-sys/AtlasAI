@@ -355,8 +355,10 @@ fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit,
                 title = { Text("ATLAS", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 4.sp) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg),
                 actions = {
-                    IconButton(onClick = { voice.stopSpeaking() }) {
-                        Icon(Icons.Default.VolumeOff, contentDescription = Tr.s("stop_voice"), tint = Color.White)
+                    if (voice.speaking) {
+                        IconButton(onClick = { voice.stopSpeaking() }) {
+                            Icon(Icons.Default.VolumeOff, contentDescription = Tr.s("stop_voice"), tint = Color.White)
+                        }
                     }
                     IconButton(onClick = { menu = true }) {
                         Icon(Icons.Default.MoreVert, contentDescription = null, tint = Color.White)
@@ -394,7 +396,7 @@ fun ChatScreen(brain: Brain, prefs: Prefs, voice: Voice, onSettings: () -> Unit,
                     item { Text(Tr.s("thinking"), color = Cyan, fontSize = 14.sp) }
                 }
             }
-            if (wait == null || wait > 0) {
+            if (prefs.internet && (wait == null || wait > 0)) {
                 Text(
                     if (wait == null) Tr.s(if (prefs.model == "auto") "all_dead" else "model_dead")
                     else String.format(Tr.s("limit_banner"), Limits.fmt(wait)),
@@ -551,6 +553,27 @@ fun SettingsScreen(
                     singleLine = true,
                     modifier = Modifier.width(170.dp)
                 )
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Text(Tr.s("s_internet"), color = Cyan, fontWeight = FontWeight.Bold)
+            Surface(color = Panel, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 6.dp)) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(Tr.s("s_internet"), color = Color.White)
+                            Text(Tr.s("internet_note"), color = Color(0xFF8CA0B5), fontSize = 12.sp)
+                        }
+                        Switch(checked = prefs.internet, onCheckedChange = { prefs.internet = it })
+                    }
+                    Text(
+                        Tr.s("search_title"), color = Color(0xFFB8C7D9), fontSize = 13.sp,
+                        modifier = Modifier.padding(start = 14.dp, top = 8.dp)
+                    )
+                    ModelOption(Tr.s("search_auto"), "", prefs.searchMode == "auto") { prefs.searchMode = "auto" }
+                    ModelOption(Tr.s("search_always"), "", prefs.searchMode == "always") { prefs.searchMode = "always" }
+                    ModelOption(Tr.s("search_off"), "", prefs.searchMode == "off") { prefs.searchMode = "off" }
+                }
             }
 
             Spacer(Modifier.height(4.dp))

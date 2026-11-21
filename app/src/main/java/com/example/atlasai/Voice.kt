@@ -7,6 +7,10 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import java.util.Locale
 
 /** Озвучка ответов (TTS) и распознавание речи (STT). Вызывать с главного потока. */
@@ -15,10 +19,28 @@ class Voice(private val ctx: Context) {
     private var ready = false
     private var recognizer: SpeechRecognizer? = null
 
+    /** true, пока Атлас говорит: по этому признаку показывается кнопка остановки. */
+    var speaking by mutableStateOf(false)
+        private set
+
     init {
         tts = TextToSpeech(ctx) { status ->
             ready = status == TextToSpeech.SUCCESS
             applyLang()
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    speaking = true
+                }
+
+                override fun onDone(utteranceId: String?) {
+                    speaking = false
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    speaking = false
+                }
+            })
         }
     }
 
@@ -38,6 +60,7 @@ class Voice(private val ctx: Context) {
     }
 
     fun stopSpeaking() {
+        speaking = false
         tts?.stop()
     }
 
