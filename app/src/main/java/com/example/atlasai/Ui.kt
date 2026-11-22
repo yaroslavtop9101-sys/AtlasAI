@@ -327,6 +327,7 @@ fun KeyEditor(value: String, onChange: (String) -> Unit) {
 
 private const val TUT = 17
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TutorialScreen(prefs: Prefs, firstRun: Boolean, onDone: () -> Unit, onExit: () -> Unit) {
     val ctx = LocalContext.current
