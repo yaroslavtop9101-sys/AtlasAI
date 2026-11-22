@@ -14,9 +14,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = Prefs(this)
-        voice = Voice(this)
+        voice = Voice(this, prefs)
         setContent {
-            AtlasTheme {
+            AtlasTheme(prefs) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     AtlasApp(prefs, voice)
                 }

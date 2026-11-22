@@ -3,6 +3,8 @@ package com.example.atlasai
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -14,53 +16,106 @@ import androidx.compose.runtime.setValue
 import java.util.Locale
 
 /** Озвучка ответов (TTS) и распознавание речи (STT). Вызывать с главного потока. */
-class Voice(private val ctx: Context) {
+class Voice(private val ctx: Context, private val prefs: Prefs) {
     private var tts: TextToSpeech? = null
     private var ready = false
     private var recognizer: SpeechRecognizer? = null
+    private val main = Handler(Looper.getMainLooper())
+    private var counter = 0
+    private var currentId = ""
 
-    /** true, пока Атлас говорит: по этому признаку показывается кнопка остановки. */
+    /** true, пока Атлас говорит. */
     var speaking by mutableStateOf(false)
+        private set
+
+    /** Текст, который сейчас озвучивается (чтобы кнопка под нужным ответом показала «стоп»). */
+    var speakingText by mutableStateOf<String?>(null)
         private set
 
     init {
         tts = TextToSpeech(ctx) { status ->
             ready = status == TextToSpeech.SUCCESS
+            if (ready) {
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+
+                    override fun onDone(utteranceId: String?) {
+                        finish(utteranceId)
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        finish(utteranceId)
+                    }
+
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                        finish(utteranceId)
+                    }
+                })
+            }
             applyLang()
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    speaking = true
-                }
+        }
+    }
 
-                override fun onDone(utteranceId: String?) {
-                    speaking = false
-                }
-
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {
-                    speaking = false
-                }
-            })
+    private fun finish(id: String?) {
+        main.post {
+            if (id == currentId) {
+                speaking = false
+                speakingText = null
+            }
         }
     }
 
     private fun applyLang() {
-        if (ready) tts?.language = if (Tr.ru) Locale("ru", "RU") else Locale.US
+        val t = tts ?: return
+        if (!ready) return
+        val lang = if (Tr.ru) "ru" else "en"
+        t.language = if (Tr.ru) Locale("ru", "RU") else Locale.US
+        t.setSpeechRate(prefs.ttsRate)
+        val vn = prefs.ttsVoice
+        if (vn.isNotBlank()) {
+            t.voices?.firstOrNull { it.name == vn && it.locale.language == lang }?.let { t.voice = it }
+        }
     }
 
-    private fun clean(t: String): String = t
-        .replace(Regex("https?://\\S+"), "")
-        .replace(Regex("[*#_`>~]"), "")
-        .trim()
+    /** Названия голосов Android для текущего языка. */
+    fun voiceNames(): List<String> {
+        val lang = if (Tr.ru) "ru" else "en"
+        return try {
+            tts?.voices?.filter { it.locale.language == lang }?.map { it.name }?.sorted() ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Убираем ссылки, значки разметки и строки таблиц (таблицу не читаем вслух). */
+    private fun clean(t: String): String {
+        val lines = t.lines()
+        val hasTable = lines.any { it.trim().startsWith("|") }
+        val body = lines.filter { !it.trim().startsWith("|") }.joinToString("\n")
+        val out = body
+            .replace(Regex("https?://\\S+"), "")
+            .replace(Regex("[*#_`>~]"), "")
+            .trim()
+        return if (hasTable) (out + " " + Tr.s("table_spoken")).trim() else out
+    }
 
     fun speak(text: String) {
         if (!ready) return
         applyLang()
-        tts?.speak(clean(text), TextToSpeech.QUEUE_FLUSH, null, "atlas")
+        val say = clean(text).take(3900)
+        if (say.isBlank()) return
+        counter++
+        currentId = "atlas$counter"
+        speakingText = text
+        speaking = true
+        tts?.speak(say, TextToSpeech.QUEUE_FLUSH, null, currentId)
     }
 
     fun stopSpeaking() {
+        currentId = ""
         speaking = false
+        speakingText = null
         tts?.stop()
     }
 

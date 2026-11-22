@@ -4,21 +4,41 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-/** Настройки пользователя. Значения наблюдаемы для Compose и сохраняются на диск. */
+/** Настройки пользователя. Значения наблюдаемы для Compose и сохраняются на диск. Ключ Google хранится зашифрованным. */
 class Prefs(ctx: Context) {
     private val sp = ctx.getSharedPreferences("atlas", Context.MODE_PRIVATE)
 
     private var _lang by mutableStateOf(sp.getString("lang", "") ?: "")
     private var _name by mutableStateOf(sp.getString("name", "") ?: "")
-    private var _key by mutableStateOf(sp.getString("key", "") ?: "")
+    private var _key by mutableStateOf(loadKey())
     private var _onboarded by mutableStateOf(sp.getBoolean("onboarded", false))
     private var _voiceInput by mutableStateOf(sp.getBoolean("voiceInput", true))
     private var _speak by mutableStateOf(sp.getBoolean("speak", true))
-    private var _model by mutableStateOf(sp.getString("model", "auto") ?: "auto")
-    private var _imageBlocked by mutableStateOf(sp.getBoolean("imageBlocked", false))
     private var _internet by mutableStateOf(sp.getBoolean("internet", true))
-    private var _searchMode by mutableStateOf(sp.getString("searchMode", "auto") ?: "auto")
+    private var _search by mutableStateOf(sp.getString("search", "auto") ?: "auto")
+    private var _model by mutableStateOf(sp.getString("model", "gemini-2.5-flash") ?: "gemini-2.5-flash")
+    private var _len by mutableStateOf(sp.getString("len", "normal") ?: "normal")
+    private var _style by mutableStateOf(sp.getString("style", "jarvis") ?: "jarvis")
+    private var _rate by mutableStateOf(sp.getFloat("rate", 1f))
+    private var _ttsVoice by mutableStateOf(sp.getString("ttsVoice", "") ?: "")
+    private var _theme by mutableStateOf(sp.getString("theme", "dark") ?: "dark")
+    private var _fontScale by mutableStateOf(sp.getFloat("fontScale", 1f))
+    private var _autoDelete by mutableStateOf(sp.getInt("autoDelete", 0))
+
+    /** Ключ хранится только в зашифрованном виде (Android Keystore). Старый открытый ключ переносится. */
+    private fun loadKey(): String {
+        val enc = sp.getString("key_enc", "") ?: ""
+        if (enc.isNotBlank()) return Crypto.dec(enc)
+        val old = sp.getString("key", "") ?: ""
+        if (old.isNotBlank()) {
+            sp.edit().putString("key_enc", Crypto.enc(old)).remove("key").apply()
+        }
+        return old
+    }
 
     init {
         if (_lang.isNotBlank()) Tr.lang = _lang
@@ -42,9 +62,8 @@ class Prefs(ctx: Context) {
     var key: String
         get() = _key
         set(v) {
-            if (v.trim() != _key) imageBlocked = false
             _key = v.trim()
-            sp.edit().putString("key", v.trim()).apply()
+            sp.edit().putString("key_enc", Crypto.enc(v.trim())).remove("key").apply()
         }
 
     var onboarded: Boolean
@@ -68,22 +87,7 @@ class Prefs(ctx: Context) {
             sp.edit().putBoolean("speak", v).apply()
         }
 
-    var model: String
-        get() = _model
-        set(v) {
-            _model = v
-            sp.edit().putString("model", v).apply()
-        }
-
-    /** Google не пустил к картинкам с этим ключом — больше не пробуем, пока ключ не сменится. */
-    var imageBlocked: Boolean
-        get() = _imageBlocked
-        set(v) {
-            _imageBlocked = v
-            sp.edit().putBoolean("imageBlocked", v).apply()
-        }
-
-    /** Ручной выключатель интернета для Атласа: выкл = Google не используется вообще. */
+    /** Выкл = Атлас вообще не обращается к Google и отвечает только офлайн. */
     var internet: Boolean
         get() = _internet
         set(v) {
@@ -91,17 +95,96 @@ class Prefs(ctx: Context) {
             sp.edit().putBoolean("internet", v).apply()
         }
 
-    /** auto: модель решает сама; always: всегда с поиском; off: без поиска. */
+    /** auto | always | off */
     var searchMode: String
-        get() = _searchMode
+        get() = _search
         set(v) {
-            _searchMode = v
-            sp.edit().putString("searchMode", v).apply()
+            _search = v
+            sp.edit().putString("search", v).apply()
         }
+
+    var model: String
+        get() = _model
+        set(v) {
+            _model = v
+            sp.edit().putString("model", v).apply()
+        }
+
+    /** short | normal | long */
+    var answerLen: String
+        get() = _len
+        set(v) {
+            _len = v
+            sp.edit().putString("len", v).apply()
+        }
+
+    /** jarvis | friendly | formal */
+    var style: String
+        get() = _style
+        set(v) {
+            _style = v
+            sp.edit().putString("style", v).apply()
+        }
+
+    var ttsRate: Float
+        get() = _rate
+        set(v) {
+            _rate = v
+            sp.edit().putFloat("rate", v).apply()
+        }
+
+    var ttsVoice: String
+        get() = _ttsVoice
+        set(v) {
+            _ttsVoice = v
+            sp.edit().putString("ttsVoice", v).apply()
+        }
+
+    /** dark | light | system */
+    var theme: String
+        get() = _theme
+        set(v) {
+            _theme = v
+            sp.edit().putString("theme", v).apply()
+        }
+
+    var fontScale: Float
+        get() = _fontScale
+        set(v) {
+            _fontScale = v
+            sp.edit().putFloat("fontScale", v).apply()
+        }
+
+    /** 0 = не удалять */
+    var autoDeleteDays: Int
+        get() = _autoDelete
+        set(v) {
+            _autoDelete = v
+            sp.edit().putInt("autoDelete", v).apply()
+        }
+
+    var lastChat: String
+        get() = sp.getString("lastChat", "") ?: ""
+        set(v) {
+            sp.edit().putString("lastChat", v).apply()
+        }
+
+    private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+
+    /** Сколько запросов к Gemini приложение отправило сегодня (считает только себя). */
+    fun requestsToday(): Int =
+        if (sp.getString("req_date", "") == today()) sp.getInt("req_count", 0) else 0
+
+    fun bumpRequests() {
+        val n = requestsToday() + 1
+        sp.edit().putString("req_date", today()).putInt("req_count", n).apply()
+    }
 
     fun resetAll() {
         sp.edit().clear().apply()
         _lang = ""; _name = ""; _key = ""; _onboarded = false
-        _voiceInput = true; _speak = true; _model = "auto"; _imageBlocked = false; _internet = true; _searchMode = "auto"
+        _voiceInput = true; _speak = true; _internet = true
+        _search = "auto"; _model = "gemini-2.5-flash"; _len = "normal"; _style = "jarvis"
+        _rate = 1f; _ttsVoice = ""; _theme = "dark"; _fontScale = 1f; _autoDelete = 0
     }
 }
