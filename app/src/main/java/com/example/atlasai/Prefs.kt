@@ -20,7 +20,7 @@ class Prefs(ctx: Context) {
     private var _speak by mutableStateOf(sp.getBoolean("speak", true))
     private var _internet by mutableStateOf(sp.getBoolean("internet", true))
     private var _search by mutableStateOf(sp.getString("search", "auto") ?: "auto")
-    private var _model by mutableStateOf(sp.getString("model", "gemini-2.5-flash") ?: "gemini-2.5-flash")
+    private var _model by mutableStateOf(loadModel())
     private var _len by mutableStateOf(sp.getString("len", "normal") ?: "normal")
     private var _style by mutableStateOf(sp.getString("style", "jarvis") ?: "jarvis")
     private var _rate by mutableStateOf(sp.getFloat("rate", 1f))
@@ -28,6 +28,18 @@ class Prefs(ctx: Context) {
     private var _theme by mutableStateOf(sp.getString("theme", "dark") ?: "dark")
     private var _fontScale by mutableStateOf(sp.getFloat("fontScale", 1f))
     private var _autoDelete by mutableStateOf(sp.getInt("autoDelete", 0))
+
+    /** Старые сохранённые модели (2.x) Google закрыл для новых пользователей — переносим на актуальные. */
+    private fun loadModel(): String {
+        val m = sp.getString("model", "") ?: ""
+        return when {
+            m.isBlank() -> "gemini-3.8-flash"
+            m == "gemini-2.5-flash-lite" -> "gemini-3.5-flash-lite"
+            m == "gemini-2.5-pro" -> "gemini-3.1-pro-preview"
+            m.startsWith("gemini-2") -> "gemini-3.8-flash"
+            else -> m
+        }
+    }
 
     /** Ключ хранится только в зашифрованном виде (Android Keystore). Старый открытый ключ переносится. */
     private fun loadKey(): String {
@@ -184,7 +196,7 @@ class Prefs(ctx: Context) {
         sp.edit().clear().apply()
         _lang = ""; _name = ""; _key = ""; _onboarded = false
         _voiceInput = true; _speak = true; _internet = true
-        _search = "auto"; _model = "gemini-2.5-flash"; _len = "normal"; _style = "jarvis"
+        _search = "auto"; _model = "gemini-3.8-flash"; _len = "normal"; _style = "jarvis"
         _rate = 1f; _ttsVoice = ""; _theme = "dark"; _fontScale = 1f; _autoDelete = 0
     }
 }

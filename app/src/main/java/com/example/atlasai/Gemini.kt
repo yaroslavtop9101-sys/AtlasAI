@@ -15,7 +15,7 @@ class ApiException(message: String) : Exception(message)
 /** Клиент Google Gemini через REST. Вызывать только не из главного потока. */
 object Gemini {
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
-    private const val IMAGE_MODEL = "gemini-2.5-flash-image"
+    private const val IMAGE_MODEL = "gemini-3.1-flash-image"
 
     class Attachment(val mime: String, val b64: String)
 

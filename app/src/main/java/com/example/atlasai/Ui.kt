@@ -878,9 +878,9 @@ private fun ChatsDialog(brain: Brain, onClose: () -> Unit) {
 }
 
 private val MODELS = listOf(
-    Triple("gemini-2.5-flash", "Flash", "model_flash"),
-    Triple("gemini-2.5-flash-lite", "Flash-Lite", "model_lite"),
-    Triple("gemini-2.5-pro", "Pro", "model_pro")
+    Triple("gemini-3.8-flash", "Flash", "model_flash"),
+    Triple("gemini-3.5-flash-lite", "Flash-Lite", "model_lite"),
+    Triple("gemini-3.1-pro-preview", "Pro", "model_pro")
 )
 
 @Composable
