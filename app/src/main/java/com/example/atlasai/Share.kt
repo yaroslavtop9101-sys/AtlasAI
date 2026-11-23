@@ -16,6 +16,15 @@ object Share {
         Toast.makeText(ctx, Tr.s("copied"), Toast.LENGTH_SHORT).show()
     }
 
+    fun mimeFor(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "zip" -> "application/zip"
+        "pdf" -> "application/pdf"
+        "csv" -> "text/csv"
+        "html", "htm" -> "text/html"
+        "json" -> "application/json"
+        else -> "text/plain"
+    }
+
     fun text(ctx: Context, text: String) {
         val i = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

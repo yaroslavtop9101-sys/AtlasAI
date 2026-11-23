@@ -1,6 +1,14 @@
 package com.example.atlasai
 
 import android.Manifest
+import android.widget.Toast
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.runtime.DisposableEffect
+import androidx.core.content.FileProvider
+import androidx.fragment.app.FragmentActivity
+import java.io.File
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -178,7 +186,7 @@ private val COMMANDS = listOf(
     Cmd("/limits", "c_limits"), Cmd("/stop", "c_stop"), Cmd("/voice", "c_voice"),
     Cmd("/text", "c_text"), Cmd("/settings", "c_settings"), Cmd("/tutorial", "c_tutorial"),
     Cmd("/clear", "c_clear"), Cmd("/export", "c_export"), Cmd("/help", "c_help"),
-    Cmd("/internet", "c_internet"), Cmd("/memory", "c_memory")
+    Cmd("/internet", "c_internet"), Cmd("/memory", "c_memory"), Cmd("/hands", "c_hands")
 )
 
 // ---------- Корень приложения ----------
@@ -198,6 +206,10 @@ fun AtlasApp(prefs: Prefs, voice: Voice) {
         )
     }
     var memBack by remember { mutableStateOf("chat") }
+    if (AppLock.locked && prefs.appLock) {
+        LockScreen(prefs)
+        return
+    }
     when (screen) {
         "lang" -> LanguageScreen(prefs) { screen = "tutorial" }
         "tutorial" -> TutorialScreen(prefs, firstRun = true, onDone = { screen = "setup" }, onExit = {})
@@ -214,7 +226,7 @@ fun AtlasApp(prefs: Prefs, voice: Voice) {
             onTutorial = { screen = "tutorial_again" },
             onReset = { brain.wipeAll(); prefs.resetAll(); screen = "lang" }
         )
-        "advanced" -> AdvancedScreen(prefs, voice) { screen = "settings" }
+        "advanced" -> AdvancedScreen(brain, prefs, voice) { screen = "settings" }
         "memory" -> MemoryScreen(brain.memory) { screen = memBack }
         else -> ChatScreen(
             brain, prefs, voice,
@@ -325,7 +337,7 @@ fun KeyEditor(value: String, onChange: (String) -> Unit) {
 
 // ---------- 2. Обучение: 17 шагов, пропустить нельзя ----------
 
-private const val TUT = 17
+private const val TUT = 20
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -564,6 +576,18 @@ fun ChatScreen(
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { picked.addAll(it) }
+    var photoUri by remember { mutableStateOf<Uri?>(null) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) photoUri?.let { picked.add(it) }
+    }
+
+    fun takePhoto() {
+        val dir = File(ctx.cacheDir, "export").apply { mkdirs() }
+        val f = File(dir, "photo_" + System.currentTimeMillis() + ".jpg")
+        val u = FileProvider.getUriForFile(ctx, ctx.packageName + ".files", f)
+        photoUri = u
+        camera.launch(u)
+    }
 
     LaunchedEffect(Unit) {
         brain.greet()
@@ -576,8 +600,24 @@ fun ChatScreen(
             )
         )
     }
-    LaunchedEffect(brain.messages.size, brain.busy) {
+    LaunchedEffect(brain.messages.size, brain.busy, brain.streamText.length / 60) {
         if (brain.messages.isNotEmpty()) list.animateScrollToItem(brain.messages.size - 1 + if (brain.busy) 1 else 0)
+    }
+
+    // «Поделиться → Атлас»: текст и файлы из других приложений
+    LaunchedEffect(Inbox.pending) {
+        if (Inbox.pending) {
+            Inbox.text?.let { t ->
+                input = t
+                prefs.voiceInput = false
+            }
+            if (Inbox.uris.isNotEmpty()) {
+                picked.addAll(Inbox.uris)
+                Inbox.uris.clear()
+            }
+            Inbox.text = null
+            Inbox.pending = false
+        }
     }
 
     fun exportChat() {
@@ -611,6 +651,10 @@ fun ChatScreen(
                 prefs.internet = !prefs.internet
                 brain.note(Tr.s(if (prefs.internet) "net_on" else "net_off_note"))
             }
+            "/hands" -> {
+                prefs.handsFree = !prefs.handsFree
+                brain.note(Tr.s(if (prefs.handsFree) "hands_on" else "hands_off"))
+            }
             "/memory" -> onMemory()
             else -> brain.note(Tr.s("unknown_cmd"))
         }
@@ -643,6 +687,14 @@ fun ChatScreen(
             onResult = { listening = false; heard = ""; submit(it) },
             onFail = { listening = false; heard = it }
         )
+    }
+
+    // режим без рук: после того как Атлас договорил, снова слушаем
+    DisposableEffect(Unit) {
+        voice.onSpoken = {
+            if (prefs.handsFree && prefs.voiceInput && !listening && !brain.busy) toggleMic()
+        }
+        onDispose { voice.onSpoken = null }
     }
 
     Scaffold(
@@ -698,7 +750,26 @@ fun ChatScreen(
                     )
                 }
                 if (brain.busy) {
-                    item { Text(Tr.s("thinking"), color = C.accent, fontSize = 14.sp) }
+                    item {
+                        if (brain.streamText.isBlank()) {
+                            Text(Tr.s("thinking"), color = C.accent, fontSize = 14.sp)
+                        } else {
+                            Surface(
+                                color = C.panel,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.widthIn(max = 340.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    parseBlocks(brain.streamText).forEach { b ->
+                                        when (b) {
+                                            is Block.Txt -> Text(b.s, color = C.text, fontSize = 16.sp)
+                                            is Block.Tbl -> TableView(b.rows)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (picked.isNotEmpty()) {
@@ -737,6 +808,9 @@ fun ChatScreen(
             ) {
                 IconButton(onClick = { picker.launch("*/*") }) {
                     Icon(Icons.Default.AttachFile, contentDescription = null, tint = C.accent)
+                }
+                IconButton(onClick = { takePhoto() }) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = C.accent)
                 }
                 if (prefs.voiceInput) {
                     TextButton(onClick = { dialog = "cmds" }) {
@@ -778,6 +852,15 @@ fun ChatScreen(
 
     // --- окна ---
     if (dialog == "chats") ChatsDialog(brain) { dialog = "" }
+    brain.pending?.let { p ->
+        AlertDialog(
+            onDismissRequest = { brain.cancelPending() },
+            title = { Text(p.title) },
+            text = { Text(p.body) },
+            confirmButton = { TextButton(onClick = { brain.confirmPending() }) { Text(Tr.s("do_it")) } },
+            dismissButton = { TextButton(onClick = { brain.cancelPending() }) { Text(Tr.s("cancel")) } }
+        )
+    }
     if (dialog == "model") ModelDialog(prefs) { dialog = "" }
     if (dialog == "cmds") {
         AlertDialog(
@@ -992,6 +1075,43 @@ private fun Bubble(
                         }
                     }
                 }
+                if (m.outFiles.isNotEmpty()) {
+                    Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        m.outFiles.forEach { name ->
+                            OutlinedButton(onClick = {
+                                val f = brain.creator.fileOf(name)
+                                if (f.exists()) {
+                                    Share.file(ctx, name, Share.mimeFor(name), f.readBytes())
+                                } else {
+                                    Toast.makeText(ctx, Tr.s("file_gone"), Toast.LENGTH_SHORT).show()
+                                }
+                            }) {
+                                Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(name, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                if (m.sources.isNotEmpty()) {
+                    Column(Modifier.padding(top = 4.dp)) {
+                        Text(Tr.s("sources"), color = C.sub, fontSize = 12.sp)
+                        m.sources.take(6).forEach { w ->
+                            Text(
+                                w.title.ifBlank { w.url },
+                                color = C.accent,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                modifier = Modifier
+                                    .clickable { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(w.url))) }
+                                    .padding(vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+                if (m.model.isNotBlank()) {
+                    Text(String.format(Tr.s("model_note"), m.model), color = C.sub, fontSize = 11.sp)
+                }
                 if (m.text.isNotBlank()) {
                     val lastUser = brain.messages.indexOfLast { it.fromUser }
                     val canRegen = last && !brain.busy && lastUser >= 0 &&
@@ -1147,7 +1267,18 @@ fun SettingsScreen(
     onReset: () -> Unit
 ) {
     BackHandler(onBack = onBack)
+    val ctx = LocalContext.current
     var keyDialog by remember { mutableStateOf(false) }
+
+    fun setLock(on: Boolean) {
+        if (!on) {
+            prefs.appLock = false
+        } else if (BiometricManager.from(ctx).canAuthenticate(LOCK_AUTH) == BiometricManager.BIOMETRIC_SUCCESS) {
+            prefs.appLock = true
+        } else {
+            Toast.makeText(ctx, Tr.s("lock_unavailable"), Toast.LENGTH_LONG).show()
+        }
+    }
     var keyText by remember { mutableStateOf(prefs.key) }
 
     Scaffold(
@@ -1182,6 +1313,12 @@ fun SettingsScreen(
                     listOf("auto" to Tr.s("sm_auto"), "always" to Tr.s("sm_always"), "off" to Tr.s("sm_off")),
                     prefs.searchMode
                 ) { prefs.searchMode = it }
+            }
+            GearRow(Tr.s("s_hands")) {
+                Switch(checked = prefs.handsFree, onCheckedChange = { prefs.handsFree = it })
+            }
+            GearRow(Tr.s("s_lock")) {
+                Switch(checked = prefs.appLock, onCheckedChange = { setLock(it) })
             }
             GearRow(Tr.s("s_lang")) {
                 Row {
@@ -1233,7 +1370,7 @@ fun SettingsScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AdvancedScreen(prefs: Prefs, voice: Voice, onBack: () -> Unit) {
+fun AdvancedScreen(brain: Brain, prefs: Prefs, voice: Voice, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     var voiceMenu by remember { mutableStateOf(false) }
     val names = remember(Tr.lang) { voice.voiceNames() }
@@ -1256,6 +1393,18 @@ fun AdvancedScreen(prefs: Prefs, voice: Voice, onBack: () -> Unit) {
             Modifier.padding(pad).fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            GearRow(Tr.s("adv_stream")) {
+                Switch(checked = prefs.streaming, onCheckedChange = { prefs.streaming = it })
+            }
+            GearRow(Tr.s("adv_encrypt")) {
+                Switch(
+                    checked = prefs.encryptChats,
+                    onCheckedChange = {
+                        prefs.encryptChats = it
+                        brain.chats.convertAll()
+                    }
+                )
+            }
             CardColumn(Tr.s("adv_len")) {
                 Choice(
                     listOf("short" to Tr.s("len_short"), "normal" to Tr.s("len_normal"), "long" to Tr.s("len_long")),
@@ -1345,4 +1494,57 @@ private fun GearRow(label: String, control: @Composable () -> Unit) {
 @Composable
 private fun SettingsButton(label: String, onClick: () -> Unit) {
     OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(label) }
+}
+
+// ---------- Блокировка приложения ----------
+
+private val LOCK_AUTH =
+    BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+
+@Composable
+fun LockScreen(prefs: Prefs) {
+    val ctx = LocalContext.current
+
+    fun prompt() {
+        val act = ctx as? FragmentActivity
+        if (act == null) {
+            AppLock.locked = false
+            return
+        }
+        val bp = BiometricPrompt(
+            act,
+            ContextCompat.getMainExecutor(ctx),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    AppLock.locked = false
+                }
+            }
+        )
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(Tr.s("lock_title"))
+            .setAllowedAuthenticators(LOCK_AUTH)
+            .build()
+        bp.authenticate(info)
+    }
+
+    LaunchedEffect(Unit) {
+        if (BiometricManager.from(ctx).canAuthenticate(LOCK_AUTH) != BiometricManager.BIOMETRIC_SUCCESS) {
+            // на телефоне нет ни отпечатка, ни блокировки экрана: снимаем блокировку, чтобы не запереть вас
+            prefs.appLock = false
+            AppLock.locked = false
+        } else {
+            prompt()
+        }
+    }
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("ATLAS", color = C.accent, fontSize = 44.sp, fontWeight = FontWeight.Bold, letterSpacing = 8.sp)
+        Spacer(Modifier.height(12.dp))
+        Text(Tr.s("lock_text"), color = C.sub)
+        Spacer(Modifier.height(32.dp))
+        Button(onClick = { prompt() }) { Text(Tr.s("unlock")) }
+    }
 }

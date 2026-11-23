@@ -23,7 +23,13 @@ class Actions(private val ctx: Context) {
     private fun granted(p: String) =
         ctx.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
 
+    /** Есть ли в фразе отрицание («не включай», «don't call»): тогда правила ничего не делают. */
+    fun negated(t: String): Boolean =
+        Regex("(^|\\s)(не|без|нельзя|don't|dont|do not|never|without|no)(\\s|$)")
+            .containsMatchIn(t.lowercase())
+
     fun isImageRequest(t: String): Boolean {
+        if (negated(t)) return false
         if (Regex("(нарисуй|draw )").containsMatchIn(t)) return true
         val verb = Regex("(сгенерируй|создай|сделай|generate|create|make)").containsMatchIn(t)
         val noun = Regex("(фото|картин|изображен|рисун|photo|picture|image|drawing)").containsMatchIn(t)
@@ -33,6 +39,7 @@ class Actions(private val ctx: Context) {
     /** Возвращает ответ Атласа, если фраза была командой, иначе null. */
     fun tryHandle(raw: String): String? {
         val t = raw.lowercase().trim().trimEnd('.', '!', '?')
+        if (negated(t)) return null
         val off = Regex("(выключ|отключ|погаси|turn off|switch off| off)").containsMatchIn(" $t")
 
         // Фонарик
@@ -178,6 +185,133 @@ class Actions(private val ctx: Context) {
             }
         }
         return null
+    }
+
+    // ---------- Отдельные действия (их вызывает модель через функции) ----------
+
+    fun hasCallPermission() = granted(Manifest.permission.CALL_PHONE)
+    fun hasSmsPermission() = granted(Manifest.permission.SEND_SMS)
+
+    fun flashlight(on: Boolean): String {
+        try {
+            val id = cam.cameraIdList.firstOrNull {
+                cam.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return Tr.s("flash_fail")
+            cam.setTorchMode(id, on)
+            return Tr.s(if (on) "flash_on" else "flash_off")
+        } catch (e: Exception) {
+            return Tr.s("flash_fail")
+        }
+    }
+
+    fun setTimer(secs: Int): String {
+        launch(
+            Intent(AlarmClock.ACTION_SET_TIMER)
+                .putExtra(AlarmClock.EXTRA_LENGTH, secs)
+                .putExtra(AlarmClock.EXTRA_MESSAGE, "Atlas")
+                .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        )
+        val label = when {
+            secs % 3600 == 0 -> "${secs / 3600} " + (if (Tr.ru) "ч" else "h")
+            secs % 60 == 0 -> "${secs / 60} " + (if (Tr.ru) "мин" else "min")
+            else -> "$secs " + (if (Tr.ru) "сек" else "sec")
+        }
+        return String.format(Tr.s("timer_set"), label)
+    }
+
+    fun cancelTimer(): String {
+        launch(Intent(AlarmClock.ACTION_DISMISS_TIMER))
+        return Tr.s("timer_off")
+    }
+
+    fun setAlarm(h: Int, min: Int): String {
+        launch(
+            Intent(AlarmClock.ACTION_SET_ALARM)
+                .putExtra(AlarmClock.EXTRA_HOUR, h)
+                .putExtra(AlarmClock.EXTRA_MINUTES, min)
+                .putExtra(AlarmClock.EXTRA_MESSAGE, "Atlas")
+                .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        )
+        return String.format(Tr.s("alarm_set"), String.format("%02d:%02d", h, min))
+    }
+
+    fun showAlarms(): String {
+        launch(Intent(AlarmClock.ACTION_SHOW_ALARMS))
+        return Tr.s("alarm_show")
+    }
+
+    fun youtube(query: String): String {
+        val q = query.trim()
+        return if (q.isBlank()) {
+            val i = ctx.packageManager.getLaunchIntentForPackage("com.google.android.youtube")
+                ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com"))
+            launch(i)
+            Tr.s("yt_open")
+        } else {
+            launch(
+                Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(q))
+                )
+            )
+            String.format(Tr.s("yt_search"), q)
+        }
+    }
+
+    /** Имя контакта или номер -> (как показать, номер). null, если контакт не найден. */
+    fun resolveContact(target: String): Pair<String, String>? {
+        val t = target.trim()
+        val digits = t.filter { it.isDigit() || it == '+' }
+        if (digits.length >= 5 && digits.length >= t.replace(" ", "").length - 2) return digits to digits
+        return findContact(t.lowercase())
+    }
+
+    fun call(number: String, label: String): String {
+        if (!granted(Manifest.permission.CALL_PHONE)) return Tr.s("perm")
+        launch(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number))))
+        return String.format(Tr.s("calling"), label)
+    }
+
+    fun sms(number: String, label: String, text: String): String {
+        if (!granted(Manifest.permission.SEND_SMS)) return Tr.s("perm")
+        return try {
+            @Suppress("DEPRECATION")
+            val sm = SmsManager.getDefault()
+            sm.sendMultipartTextMessage(number, null, sm.divideMessage(text), null, null)
+            String.format(Tr.s("sms_sent"), label)
+        } catch (e: Exception) {
+            Tr.s("sms_fail")
+        }
+    }
+
+    /** Открывает приложение по названию. null, если такого нет. */
+    fun openApp(name: String): String? {
+        val n = name.lowercase().trim()
+        if (n.length < 2) return null
+        val pm = ctx.packageManager
+        val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val app = pm.queryIntentActivities(main, 0).firstOrNull {
+            it.loadLabel(pm).toString().lowercase().contains(n)
+        } ?: return null
+        val i = pm.getLaunchIntentForPackage(app.activityInfo.packageName) ?: return null
+        launch(i)
+        return String.format(Tr.s("app_open"), app.loadLabel(pm))
+    }
+
+    /** Открывает поиск в Google Play (установить приложение может только сам пользователь). */
+    fun playStore(query: String): String {
+        val q = Uri.encode(query.trim())
+        return try {
+            launch(Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$q&c=apps")))
+            String.format(Tr.s("play_open"), query.trim())
+        } catch (e: Exception) {
+            try {
+                launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=$q&c=apps")))
+                String.format(Tr.s("play_open"), query.trim())
+            } catch (e2: Exception) {
+                Tr.s("app_nf")
+            }
+        }
     }
 
     private fun findContact(name: String): Pair<String, String>? {

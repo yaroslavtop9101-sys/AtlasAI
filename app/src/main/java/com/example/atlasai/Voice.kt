@@ -32,6 +32,9 @@ class Voice(private val ctx: Context, private val prefs: Prefs) {
     var speakingText by mutableStateOf<String?>(null)
         private set
 
+    /** Вызывается, когда Атлас сам договорил ответ до конца (не при остановке). */
+    var onSpoken: (() -> Unit)? = null
+
     init {
         tts = TextToSpeech(ctx) { status ->
             ready = status == TextToSpeech.SUCCESS
@@ -40,7 +43,7 @@ class Voice(private val ctx: Context, private val prefs: Prefs) {
                     override fun onStart(utteranceId: String?) {}
 
                     override fun onDone(utteranceId: String?) {
-                        finish(utteranceId)
+                        finish(utteranceId, true)
                     }
 
                     @Deprecated("Deprecated in Java")
@@ -57,11 +60,12 @@ class Voice(private val ctx: Context, private val prefs: Prefs) {
         }
     }
 
-    private fun finish(id: String?) {
+    private fun finish(id: String?, completed: Boolean = false) {
         main.post {
             if (id == currentId) {
                 speaking = false
                 speakingText = null
+                if (completed) main.postDelayed({ onSpoken?.invoke() }, 400)
             }
         }
     }

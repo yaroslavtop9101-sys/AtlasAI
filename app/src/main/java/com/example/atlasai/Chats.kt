@@ -8,10 +8,33 @@ import java.io.File
 data class ChatInfo(val id: String, val title: String, val updated: Long)
 
 /** Сохранённые чаты. Каждый чат лежит в отдельном файле в зашифрованном виде (Crypto). */
-class ChatStore(ctx: Context) {
+class ChatStore(ctx: Context, private val prefs: Prefs) {
     private val dir = File(ctx.filesDir, "chats").apply { mkdirs() }
 
     private fun file(id: String) = File(dir, "$id.dat")
+
+    /** Файл чата: «E:» + зашифрованный текст или «P:» + обычный JSON. Старые файлы без метки считаются зашифрованными. */
+    private fun encode(json: String): String {
+        if (!prefs.encryptChats) return "P:$json"
+        val e = Crypto.enc(json)
+        return if (e.isBlank()) "" else "E:$e"
+    }
+
+    private fun decode(raw: String): String = when {
+        raw.startsWith("P:") -> raw.substring(2)
+        raw.startsWith("E:") -> Crypto.dec(raw.substring(2))
+        else -> Crypto.dec(raw)
+    }
+
+    /** Переписывает все чаты в текущем режиме (после переключателя «Шифровать историю»). */
+    fun convertAll() {
+        for (f in dir.listFiles() ?: emptyArray()) {
+            val json = decode(f.readText())
+            if (json.isBlank()) continue
+            val enc = encode(json)
+            if (enc.isNotBlank()) f.writeText(enc)
+        }
+    }
 
     fun newId(): String = System.currentTimeMillis().toString(36) + (100..999).random()
 
@@ -22,22 +45,28 @@ class ChatStore(ctx: Context) {
         }
         val arr = JSONArray()
         for (m in msgs) {
+            val src = JSONArray()
+            for (w in m.sources) src.put(JSONObject().put("t", w.title).put("u", w.url))
             arr.put(
                 JSONObject()
                     .put("u", m.fromUser)
                     .put("t", m.text)
                     .put("f", JSONArray(m.files))
+                    .put("s", src)
+                    .put("o", JSONArray(m.outFiles))
+                    .put("m", m.model)
+                    .put("q", m.silent)
             )
         }
         val o = JSONObject().put("updated", System.currentTimeMillis()).put("msgs", arr)
-        val enc = Crypto.enc(o.toString())
+        val enc = encode(o.toString())
         if (enc.isNotBlank()) file(id).writeText(enc)
     }
 
     private fun read(id: String): JSONObject? {
         val f = file(id)
         if (!f.exists()) return null
-        val json = Crypto.dec(f.readText())
+        val json = decode(f.readText())
         if (json.isBlank()) return null
         return try {
             JSONObject(json)
@@ -54,7 +83,17 @@ class ChatStore(ctx: Context) {
                 val j = arr.getJSONObject(i)
                 val fa = j.optJSONArray("f")
                 val files = if (fa == null) emptyList() else List(fa.length()) { k -> fa.getString(k) }
-                Msg(j.getBoolean("u"), j.getString("t"), null, files)
+                val sa = j.optJSONArray("s")
+                val sources = if (sa == null) emptyList() else List(sa.length()) { k ->
+                    val so = sa.getJSONObject(k)
+                    WebSource(so.optString("t"), so.optString("u"))
+                }
+                val oa = j.optJSONArray("o")
+                val outFiles = if (oa == null) emptyList() else List(oa.length()) { k -> oa.getString(k) }
+                Msg(
+                    j.getBoolean("u"), j.getString("t"), null, files,
+                    sources, outFiles, j.optString("m", ""), j.optBoolean("q", false)
+                )
             }
         } catch (e: Exception) {
             null

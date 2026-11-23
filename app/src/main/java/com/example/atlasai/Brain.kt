@@ -21,10 +21,21 @@ data class Msg(
     val fromUser: Boolean,
     val text: String,
     val image: Bitmap? = null,
-    val files: List<String> = emptyList()
+    /** Имена файлов, которые пользователь приложил к сообщению. */
+    val files: List<String> = emptyList(),
+    /** Источники, если ответ получен с поиском. */
+    val sources: List<WebSource> = emptyList(),
+    /** Файлы, которые создал Атлас (ZIP, текст, CSV, PDF...). */
+    val outFiles: List<String> = emptyList(),
+    /** Модель, если ответила не выбранная, а запасная. */
+    val model: String = "",
+    /** Служебное сообщение или ошибка: не озвучивается и не уходит в историю для модели. */
+    val silent: Boolean = false,
+    /** Действие, ожидающее подтверждения (не сохраняется). */
+    val pending: Pending? = null
 )
 
-/** Мозг Атласа: решает, что делать с фразой — команда телефона, картинка, Gemini или офлайн-ответ. */
+/** Мозг Атласа: модель сама решает, искать ли в сети, звонить, ставить таймер, создавать файлы и т.д. */
 class Brain(
     private val ctx: Context,
     val prefs: Prefs,
@@ -35,14 +46,26 @@ class Brain(
     var busy by mutableStateOf(false)
         private set
 
-    val chats = ChatStore(ctx)
+    /** Текст ответа, который приходит по частям. */
+    var streamText by mutableStateOf("")
+        private set
+
+    /** Звонок или SMS, ожидающие подтверждения. */
+    var pending by mutableStateOf<Pending?>(null)
+        private set
+
+    val chats = ChatStore(ctx, prefs)
     val memory = MemoryStore(ctx)
+    val creator = Creator(ctx)
 
     /** Номер текущего чата. */
     var chatId: String = ""
         private set
 
     private val actions = Actions(ctx)
+    private val tools = Tools(prefs, actions, creator)
+
+    private val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
 
     init {
         if (prefs.autoDeleteDays > 0) chats.purge(prefs.autoDeleteDays, prefs.lastChat)
@@ -77,7 +100,7 @@ class Brain(
 
     /** Сообщение от самого приложения (ответ на слэш-команду): без озвучки и без запроса к ИИ. */
     fun note(text: String) {
-        messages.add(Msg(false, text))
+        messages.add(Msg(false, text, silent = true))
         persist()
     }
 
@@ -119,13 +142,30 @@ class Brain(
         persist()
     }
 
-    /** Полный сброс: чаты, память. Настройки сбрасывает сам Prefs. */
+    /** Полный сброс: чаты, память, созданные файлы. Настройки сбрасывает сам Prefs. */
     fun wipeAll() {
         voice.stopSpeaking()
         chats.deleteAll()
         memory.clear()
+        creator.deleteAll()
         messages.clear()
         chatId = chats.newId()
+    }
+
+    fun confirmPending() {
+        val p = pending ?: return
+        pending = null
+        val r = try {
+            p.run()
+        } catch (e: Exception) {
+            Tr.s("error") + " " + (e.message ?: "")
+        }
+        note(r)
+    }
+
+    fun cancelPending() {
+        pending = null
+        note(Tr.s("cancelled"))
     }
 
     /** Повторить последний ответ (если исходный вопрос был без вложений). */
@@ -176,13 +216,16 @@ class Brain(
         messages.add(Msg(true, text, files = uris.map { fileName(it) }))
         persist()
         busy = true
+        streamText = ""
         scope.launch {
             val reply = withContext(Dispatchers.IO) { compute(text, uris, history) }
+            streamText = ""
             if (chatId == target) {
                 messages.add(reply)
                 persist()
+                reply.pending?.let { pending = it }
             } else {
-                // пока Атлас думал, вы перешли в другой чат — ответ кладём в тот, где был вопрос
+                // пока Атлас думал, вы перешли в другой чат: ответ кладём в тот, где был вопрос
                 val l = chats.load(target)?.toMutableList()
                 if (l != null) {
                     l.add(reply)
@@ -190,53 +233,145 @@ class Brain(
                 }
             }
             busy = false
-            if (chatId == target && prefs.speak && reply.text.isNotBlank()) voice.speak(reply.text)
+            if (chatId == target && prefs.speak && !reply.silent && reply.text.isNotBlank()) {
+                voice.speak(reply.text)
+            }
+        }
+    }
+
+    private fun partial(): ((String) -> Unit)? {
+        if (!prefs.streaming) return null
+        return { s ->
+            // служебный сигнал [[SEARCH]] показывать не нужно
+            if (!s.trimStart().startsWith("[")) {
+                scope.launch { streamText = s }
+            }
         }
     }
 
     private fun compute(text: String, uris: List<Uri>, history: List<Msg>): Msg {
+        val on = online() && prefs.internet
+        val modelPath = on && prefs.key.isNotBlank()
+        val noNet = { Msg(false, Tr.s(if (prefs.internet) "need_net" else "net_off"), silent = true) }
+        val offlineAnswer = { Msg(false, Offline.reply(text, prefs.name)) }
         try {
-            if (uris.isEmpty()) {
-                actions.tryHandle(text)?.let { return Msg(false, it) }
-            }
-            val on = online() && prefs.internet
-            val offlineAnswer = { Msg(false, Offline.reply(text, prefs.name)) }
-            val noNet = { Msg(false, Tr.s(if (prefs.internet) "need_net" else "net_off")) }
-
-            if (uris.isEmpty() && actions.isImageRequest(text.lowercase())) {
-                if (!on) return noNet()
-                if (prefs.key.isBlank()) return Msg(false, Tr.s("no_key"))
-                prefs.bumpRequests()
-                val (caption, bmp) = Gemini.image(prefs.key, text)
-                return Msg(false, caption.ifBlank { Tr.s("image_ready") }, bmp)
-            }
-            if (!on) {
-                return if (uris.isNotEmpty()) noNet() else offlineAnswer()
-            }
-            if (prefs.key.isBlank()) {
+            if (!modelPath) {
+                // без интернета или без ключа работают простые правила (с защитой от «не», «без», «don't»)
+                if (uris.isEmpty()) {
+                    actions.tryHandle(text)?.let { return Msg(false, it) }
+                    if (actions.isImageRequest(text.lowercase())) {
+                        return if (!on) noNet() else Msg(false, Tr.s("no_key"))
+                    }
+                }
+                if (!on) return if (uris.isNotEmpty()) noNet() else offlineAnswer()
                 val base = if (uris.isEmpty()) Offline.reply(text, prefs.name) + "\n\n" else ""
                 return Msg(false, base + Tr.s("no_key"))
             }
             val atts = uris.mapNotNull { load(it) }
-            prefs.bumpRequests()
             return try {
-                Msg(
-                    false,
-                    Gemini.chat(
-                        prefs.key, prefs.model, system(), history, text, atts,
-                        prefs.searchMode != "off"
-                    )
-                )
+                buildReply(askModel(text, atts, history))
             } catch (e: IOException) {
-                // связь пропала посреди запроса — продолжаем беседу офлайн
-                if (uris.isEmpty()) offlineAnswer() else noNet()
+                // связь пропала посреди запроса: простые команды и беседа продолжаются офлайн
+                if (uris.isEmpty()) {
+                    actions.tryHandle(text)?.let { return Msg(false, it) }
+                    offlineAnswer()
+                } else {
+                    noNet()
+                }
+            } catch (e: ApiException) {
+                // лимит или ошибка Google: простые команды телефона всё равно сработают
+                if (uris.isEmpty()) actions.tryHandle(text)?.let { return Msg(false, it) }
+                Msg(false, friendly(e), silent = true)
             }
+        } catch (e: ApiException) {
+            return Msg(false, friendly(e), silent = true)
         } catch (e: Exception) {
-            return Msg(false, Tr.s("error") + " " + (e.message ?: ""))
+            return Msg(false, Tr.s("error") + " " + (e.message ?: ""), silent = true)
         }
     }
 
-    private fun system(): String {
+    /** Спрашивает выбранную модель; если у неё лимит или она недоступна, пробует запасные. */
+    private fun askModel(text: String, atts: List<Gemini.Attachment>, history: List<Msg>): Gemini.Result {
+        val order = listOf(prefs.model) + fallbackModels.filter { it != prefs.model }
+        var last: ApiException? = null
+        for (m in order) {
+            try {
+                return attempt(m, text, atts, history)
+            } catch (e: ApiException) {
+                last = e
+                val msg = e.message.orEmpty().lowercase()
+                val retryable = e.code == 429 || e.code == 404 || e.code == 500 || e.code == 503 ||
+                    msg.contains("no longer available")
+                if (!retryable) throw e
+            }
+        }
+        throw last ?: ApiException("error")
+    }
+
+    private fun attempt(
+        model: String,
+        text: String,
+        atts: List<Gemini.Attachment>,
+        history: List<Msg>
+    ): Gemini.Result {
+        val withSearch = prefs.searchMode != "off"
+        prefs.bumpRequests()
+        if (withSearch && Gemini.combined) {
+            try {
+                // поиск и функции в одном запросе: модель сама решает, что нужно
+                return Gemini.respond(prefs.key, model, system(false), history, text, atts, true, true, partial())
+            } catch (e: ApiException) {
+                val m = e.message.orEmpty().lowercase()
+                val toolProblem = e.code == 400 &&
+                    (m.contains("tool") || m.contains("function") || m.contains("search") || m.contains("combin"))
+                if (!toolProblem) throw e
+                Gemini.combined = false
+            }
+        }
+        // запасной путь: сначала функции, а если нужен поиск, модель отвечает [[SEARCH]]
+        val r = Gemini.respond(prefs.key, model, system(withSearch), history, text, atts, false, true, partial())
+        if (withSearch && r.calls.isEmpty() && r.text.contains("[[SEARCH]]")) {
+            return Gemini.respond(prefs.key, model, system(false), history, text, atts, true, false, partial())
+        }
+        return r
+    }
+
+    /** Выполняет вызовы функций, которые выбрала модель, и собирает ответ. */
+    private fun buildReply(r: Gemini.Result): Msg {
+        val parts = mutableListOf<String>()
+        var image: Bitmap? = null
+        val outFiles = mutableListOf<String>()
+        var pend: Pending? = null
+        val cleaned = r.text.replace("[[SEARCH]]", "").trim()
+        if (cleaned.isNotBlank()) parts.add(cleaned)
+        for (c in r.calls) {
+            val res = tools.run(c)
+            if (res.text.isNotBlank()) parts.add(res.text)
+            if (res.image != null) image = res.image
+            outFiles.addAll(res.files)
+            if (res.pending != null) pend = res.pending
+        }
+        if (parts.isEmpty() && image == null && outFiles.isEmpty()) parts.add(Tr.s("tool_bad"))
+        return Msg(
+            false, parts.joinToString("\n\n"), image, emptyList(), r.sources, outFiles,
+            if (r.model != prefs.model) r.model else "", false, pend
+        )
+    }
+
+    private fun friendly(e: ApiException): String {
+        val m = e.message.orEmpty()
+        val low = m.lowercase()
+        return when {
+            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free")
+            e.code == 429 || low.contains("quota") -> Tr.s("err_quota")
+            e.code == 401 || e.code == 403 || low.contains("api key") -> Tr.s("err_key")
+            low.contains("mime") -> Tr.s("err_mime")
+            low.contains("no longer available") || e.code == 404 -> Tr.s("err_model")
+            else -> Tr.s("error") + " " + m.take(200)
+        }
+    }
+
+    private fun system(sentinel: Boolean): String {
         val name = prefs.name.ifBlank { "the user" }
         val language = if (Tr.ru) "Russian" else "English"
         val len = when (prefs.answerLen) {
@@ -249,10 +384,15 @@ class Brain(
             "formal" -> "Be strictly formal and businesslike, without jokes."
             else -> "Be polite, witty, calm, with light dry humour."
         }
-        val search = if (prefs.searchMode == "always") {
-            "Always use Google Search before answering factual questions."
-        } else {
-            "You can use web search for current facts."
+        val search = when {
+            prefs.searchMode == "off" ->
+                "Web search is disabled: answer from your own knowledge and say so when you are unsure about recent facts."
+            sentinel && prefs.searchMode == "always" ->
+                "For any factual or time-sensitive question reply with exactly [[SEARCH]] and nothing else."
+            sentinel ->
+                "If you need up-to-date information from the internet to answer well, reply with exactly [[SEARCH]] and nothing else."
+            prefs.searchMode == "always" -> "Always use Google Search before answering factual questions."
+            else -> "Use Google Search when you need current or uncertain facts."
         }
         val mem = if (memory.items.isEmpty()) "" else
             " Facts the user asked you to remember: " + memory.items.joinToString("; ") + ". Use them when relevant."
@@ -261,8 +401,14 @@ class Brain(
             "Reply ONLY in $language. $len " +
             "Do not use markdown, asterisks or emoji, because your answers may be read aloud. " +
             "Exception: when the user asks for a table, answer with a markdown table (pipes and a separator row) and one short sentence. " +
-            "$search Phone actions such as calls, texts, flashlight, " +
-            "YouTube, timers and image generation are executed by the app itself when the user asks." + mem
+            "Honesty: never invent facts, numbers, quotes, links or sources. If you do not know or are not sure, say so plainly " +
+            "and suggest how to find out; label guesses as guesses. " +
+            "$search " +
+            "Phone actions, pictures and files are done by calling the provided functions, only when the user clearly asks for " +
+            "them now. Never call them when the user negates the action (for example \"don't turn on the flashlight\") or only " +
+            "asks a question about it. After a function call do not repeat its details, the app confirms it itself. " +
+            "With create_files you can make text-based files (code, text, CSV, JSON, HTML, Markdown, PDF) and ZIP archives; " +
+            "you cannot build APK files or other binaries, say so if asked. You cannot install apps, but you can open Google Play search." + mem
     }
 
     private fun load(u: Uri): Gemini.Attachment? {

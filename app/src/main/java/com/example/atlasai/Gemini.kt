@@ -9,38 +9,87 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Ошибка, которую вернул сам API (неверный ключ, лимит и т.п.). */
-class ApiException(message: String) : Exception(message)
+/** Ошибка, которую вернул сам API (неверный ключ, лимит и т.п.). [code] — HTTP-код, 0 если неизвестен. */
+class ApiException(message: String, val code: Int = 0) : Exception(message)
+
+/** Источник из поиска Google. */
+class WebSource(val title: String, val url: String)
 
 /** Клиент Google Gemini через REST. Вызывать только не из главного потока. */
 object Gemini {
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
     private const val IMAGE_MODEL = "gemini-3.1-flash-image"
 
+    /** false, если Google отклонил поиск вместе с функциями в одном запросе. */
+    @Volatile
+    var combined = true
+
     class Attachment(val mime: String, val b64: String)
+    class Call(val name: String, val args: JSONObject)
+    class Result(
+        val text: String,
+        val calls: List<Call>,
+        val sources: List<WebSource>,
+        val model: String
+    )
+
+    private fun fail(code: Int, text: String): Nothing {
+        val msg = try {
+            JSONObject(text).optJSONObject("error")?.optString("message")
+        } catch (e: Exception) {
+            null
+        }
+        throw ApiException(if (msg.isNullOrBlank()) "HTTP $code" else msg, code)
+    }
+
+    private fun open(url: String, key: String): HttpURLConnection {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 20000
+        c.readTimeout = 120000
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("x-goog-api-key", key)
+        return c
+    }
 
     private fun post(model: String, key: String, body: JSONObject): JSONObject {
-        val c = URL("$BASE$model:generateContent").openConnection() as HttpURLConnection
+        val c = open("$BASE$model:generateContent", key)
         try {
-            c.requestMethod = "POST"
-            c.connectTimeout = 20000
-            c.readTimeout = 120000
-            c.doOutput = true
-            c.setRequestProperty("Content-Type", "application/json")
-            c.setRequestProperty("x-goog-api-key", key)
             c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = c.responseCode
             val stream = if (code in 200..299) c.inputStream else c.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            val json = try {
+            if (code !in 200..299) fail(code, text)
+            return try {
                 JSONObject(text)
             } catch (e: Exception) {
-                throw ApiException("HTTP $code")
+                throw ApiException("HTTP $code", code)
             }
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** Потоковый запрос: каждый кусок ответа приходит в [onChunk]. */
+    private fun stream(model: String, key: String, body: JSONObject, onChunk: (JSONObject) -> Unit) {
+        val c = open("$BASE$model:streamGenerateContent?alt=sse", key)
+        try {
+            c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = c.responseCode
             if (code !in 200..299) {
-                throw ApiException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
+                val t = c.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                fail(code, t)
             }
-            return json
+            c.inputStream.bufferedReader().use { r ->
+                while (true) {
+                    val line = r.readLine() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val data = line.substring(5).trim()
+                    if (data.isEmpty() || data == "[DONE]") continue
+                    onChunk(JSONObject(data))
+                }
+            }
         } finally {
             c.disconnect()
         }
@@ -48,18 +97,16 @@ object Gemini {
 
     private fun textPart(t: String) = JSONObject().put("text", t)
 
-    fun chat(
-        key: String,
-        model: String,
+    private fun buildBody(
         system: String,
         history: List<Msg>,
         text: String,
         atts: List<Attachment>,
-        search: Boolean
-    ): String {
+        search: Boolean,
+        tools: Boolean
+    ): JSONObject {
         val contents = JSONArray()
-        for (m in history.takeLast(20)) {
-            if (m.text.isBlank()) continue
+        for (m in history.filter { !it.silent && it.text.isNotBlank() }.takeLast(20)) {
             contents.put(
                 JSONObject()
                     .put("role", if (m.fromUser) "user" else "model")
@@ -80,20 +127,81 @@ object Gemini {
         val body = JSONObject()
             .put("contents", contents)
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(textPart(system))))
-        if (search) body.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+        val toolsArr = JSONArray()
+        if (search) toolsArr.put(JSONObject().put("google_search", JSONObject()))
+        if (tools) toolsArr.put(JSONObject().put("function_declarations", Tools.declarations()))
+        if (toolsArr.length() > 0) body.put("tools", toolsArr)
+        // поиск и функции в одном запросе работают только с этим флагом
+        if (search && tools) {
+            body.put("toolConfig", JSONObject().put("includeServerSideToolInvocations", true))
+        }
+        return body
+    }
 
-        val res = post(model, key, body)
-        val out = StringBuilder()
-        val ps = res.optJSONArray("candidates")?.optJSONObject(0)
-            ?.optJSONObject("content")?.optJSONArray("parts")
-        if (ps != null) {
-            for (i in 0 until ps.length()) out.append(ps.getJSONObject(i).optString("text", ""))
+    private class Acc {
+        val text = StringBuilder()
+        val calls = mutableListOf<Call>()
+        val sources = LinkedHashMap<String, String>()
+        var blockReason = ""
+    }
+
+    private fun absorb(acc: Acc, res: JSONObject) {
+        val cand = res.optJSONArray("candidates")?.optJSONObject(0)
+        val parts = cand?.optJSONObject("content")?.optJSONArray("parts")
+        if (parts != null) {
+            for (i in 0 until parts.length()) {
+                val p = parts.getJSONObject(i)
+                if (p.optBoolean("thought", false)) continue
+                val t = p.optString("text", "")
+                if (t.isNotEmpty()) acc.text.append(t)
+                val fc = p.optJSONObject("functionCall") ?: p.optJSONObject("function_call")
+                if (fc != null) {
+                    acc.calls.add(Call(fc.optString("name"), fc.optJSONObject("args") ?: JSONObject()))
+                }
+            }
         }
-        if (out.isBlank()) {
-            val reason = res.optJSONObject("promptFeedback")?.optString("blockReason") ?: ""
-            throw ApiException(if (reason.isNotBlank()) reason else "empty response")
+        val chunks = cand?.optJSONObject("groundingMetadata")?.optJSONArray("groundingChunks")
+        if (chunks != null) {
+            for (i in 0 until chunks.length()) {
+                val w = chunks.getJSONObject(i).optJSONObject("web") ?: continue
+                val u = w.optString("uri", "")
+                if (u.isNotBlank() && !acc.sources.containsKey(u)) acc.sources[u] = w.optString("title", u)
+            }
         }
-        return out.toString().trim()
+        val br = res.optJSONObject("promptFeedback")?.optString("blockReason", "") ?: ""
+        if (br.isNotBlank()) acc.blockReason = br
+    }
+
+    /**
+     * Один запрос к модели. [search] — включить поиск Google, [tools] — разрешить вызов функций
+     * (команды телефона, файлы, картинки). Если [onPartial] задан, ответ приходит по частям.
+     */
+    fun respond(
+        key: String,
+        model: String,
+        system: String,
+        history: List<Msg>,
+        text: String,
+        atts: List<Attachment>,
+        search: Boolean,
+        tools: Boolean,
+        onPartial: ((String) -> Unit)?
+    ): Result {
+        val body = buildBody(system, history, text, atts, search, tools)
+        val acc = Acc()
+        if (onPartial != null) {
+            stream(model, key, body) { chunk ->
+                absorb(acc, chunk)
+                onPartial(acc.text.toString())
+            }
+        } else {
+            absorb(acc, post(model, key, body))
+        }
+        val out = acc.text.toString().trim()
+        if (out.isBlank() && acc.calls.isEmpty()) {
+            throw ApiException(if (acc.blockReason.isNotBlank()) acc.blockReason else "empty response")
+        }
+        return Result(out, acc.calls, acc.sources.map { WebSource(it.value, it.key) }, model)
     }
 
     /** Возвращает подпись и картинку. */

@@ -28,6 +28,10 @@ class Prefs(ctx: Context) {
     private var _theme by mutableStateOf(sp.getString("theme", "dark") ?: "dark")
     private var _fontScale by mutableStateOf(sp.getFloat("fontScale", 1f))
     private var _autoDelete by mutableStateOf(sp.getInt("autoDelete", 0))
+    private var _streaming by mutableStateOf(sp.getBoolean("streaming", true))
+    private var _handsFree by mutableStateOf(sp.getBoolean("handsFree", false))
+    private var _appLock by mutableStateOf(sp.getBoolean("appLock", false))
+    private var _encryptChats by mutableStateOf(sp.getBoolean("encryptChats", true))
 
     /** Старые сохранённые модели (2.x) Google закрыл для новых пользователей — переносим на актуальные. */
     private fun loadModel(): String {
@@ -175,6 +179,38 @@ class Prefs(ctx: Context) {
             sp.edit().putInt("autoDelete", v).apply()
         }
 
+    /** Постепенный вывод ответа по мере получения. */
+    var streaming: Boolean
+        get() = _streaming
+        set(v) {
+            _streaming = v
+            sp.edit().putBoolean("streaming", v).apply()
+        }
+
+    /** После ответа Атлас сам снова слушает. */
+    var handsFree: Boolean
+        get() = _handsFree
+        set(v) {
+            _handsFree = v
+            sp.edit().putBoolean("handsFree", v).apply()
+        }
+
+    /** Блокировка приложения отпечатком или PIN телефона. */
+    var appLock: Boolean
+        get() = _appLock
+        set(v) {
+            _appLock = v
+            sp.edit().putBoolean("appLock", v).apply()
+        }
+
+    /** Шифровать историю чатов. */
+    var encryptChats: Boolean
+        get() = _encryptChats
+        set(v) {
+            _encryptChats = v
+            sp.edit().putBoolean("encryptChats", v).apply()
+        }
+
     var lastChat: String
         get() = sp.getString("lastChat", "") ?: ""
         set(v) {
@@ -198,5 +234,6 @@ class Prefs(ctx: Context) {
         _voiceInput = true; _speak = true; _internet = true
         _search = "auto"; _model = "gemini-3.8-flash"; _len = "normal"; _style = "jarvis"
         _rate = 1f; _ttsVoice = ""; _theme = "dark"; _fontScale = 1f; _autoDelete = 0
+        _streaming = true; _handsFree = false; _appLock = false; _encryptChats = true
     }
 }
