@@ -65,8 +65,6 @@ class Brain(
     private val actions = Actions(ctx)
     private val tools = Tools(prefs, actions, creator)
 
-    private val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
-
     init {
         if (prefs.autoDeleteDays > 0) chats.purge(prefs.autoDeleteDays, prefs.lastChat)
         val last = prefs.lastChat
@@ -292,7 +290,7 @@ class Brain(
 
     /** Спрашивает выбранную модель; если у неё лимит или она недоступна, пробует запасные. */
     private fun askModel(text: String, atts: List<Gemini.Attachment>, history: List<Msg>): Gemini.Result {
-        val order = listOf(prefs.model) + fallbackModels.filter { it != prefs.model }
+        val order = Models.fallbackOrder(prefs.model)
         var last: ApiException? = null
         for (m in order) {
             try {
@@ -358,12 +356,18 @@ class Brain(
         )
     }
 
+    /** Google иногда пишет, через сколько повторить («retry in 12h55m45s»). */
+    private fun retryHint(m: String): String {
+        val t = Regex("retry in ([0-9hm]*[0-9.]+s)").find(m)?.groupValues?.get(1) ?: return ""
+        return " " + String.format(Tr.s("retry_in"), t.replace(Regex("\\.[0-9]+"), ""))
+    }
+
     private fun friendly(e: ApiException): String {
         val m = e.message.orEmpty()
         val low = m.lowercase()
         return when {
-            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free")
-            e.code == 429 || low.contains("quota") -> Tr.s("err_quota")
+            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free") + retryHint(m)
+            e.code == 429 || low.contains("quota") -> Tr.s("err_quota") + retryHint(m)
             e.code == 401 || e.code == 403 || low.contains("api key") -> Tr.s("err_key")
             low.contains("mime") -> Tr.s("err_mime")
             low.contains("no longer available") || e.code == 404 -> Tr.s("err_model")
@@ -379,10 +383,13 @@ class Brain(
             "long" -> "Give detailed, thorough answers when the topic needs it."
             else -> "Keep answers concise and conversational."
         }
-        val style = when (prefs.style) {
-            "friendly" -> "Be warm, friendly and casual."
-            "formal" -> "Be strictly formal and businesslike, without jokes."
-            else -> "Be polite, witty, calm, with light dry humour."
+        val traits = Persona.prompts(Persona.traits, prefs.traits)
+        val speech = Persona.prompts(Persona.styles, prefs.speech)
+        val style = if (traits.isEmpty() && speech.isEmpty()) {
+            "Be polite, witty, calm, with light dry humour."
+        } else {
+            (if (traits.isNotEmpty()) "Your character: " + traits.joinToString(", ") + ". " else "") +
+                (if (speech.isNotEmpty()) "Your speech style: " + speech.joinToString(", ") + "." else "")
         }
         val search = when {
             prefs.searchMode == "off" ->

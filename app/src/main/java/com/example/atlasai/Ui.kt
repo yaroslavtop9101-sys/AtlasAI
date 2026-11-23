@@ -1,6 +1,10 @@
 package com.example.atlasai
 
 import android.Manifest
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.material3.ButtonColors
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
 import android.widget.Toast
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -129,7 +133,10 @@ class Palette(
     val accent: Color,
     val onAccent: Color,
     val line: Color
-)
+) {
+    fun withAccent(a: Color, onA: Color, mix: Float) =
+        Palette(bg, panel, lerp(bg, a, mix), text, sub, a, onA, line)
+}
 
 private val DarkP = Palette(
     bg = Color(0xFF05080F), panel = Color(0xFF0D1826), user = Color(0xFF12365A),
@@ -142,6 +149,8 @@ private val LightP = Palette(
     onAccent = Color.White, line = Color(0xFFB9C7D6)
 )
 private val LocalPalette = staticCompositionLocalOf { DarkP }
+private val LocalBtnShape = staticCompositionLocalOf<Shape> { RoundedCornerShape(50) }
+private val LocalBubbleShape = staticCompositionLocalOf<Shape> { RoundedCornerShape(16.dp) }
 private val C: Palette
     @Composable get() = LocalPalette.current
 
@@ -152,10 +161,32 @@ fun AtlasTheme(prefs: Prefs, content: @Composable () -> Unit) {
         "system" -> isSystemInDarkTheme()
         else -> true
     }
-    val p = if (dark) DarkP else LightP
+    val base = if (dark) DarkP else LightP
+    val ac = Persona.accent(prefs.accent)
+    val p = if (prefs.accent == "cyan") {
+        base
+    } else {
+        base.withAccent(
+            if (dark) ac.dark else ac.light,
+            if (dark) Color.Black else Color.White,
+            if (dark) 0.28f else 0.22f
+        )
+    }
+    val btn: Shape = when (prefs.btnShape) {
+        "square" -> RoundedCornerShape(4.dp)
+        "soft" -> RoundedCornerShape(14.dp)
+        else -> RoundedCornerShape(50)
+    }
+    val bubble: Shape = when (prefs.bubbleShape) {
+        "square" -> RoundedCornerShape(4.dp)
+        "round" -> RoundedCornerShape(26.dp)
+        else -> RoundedCornerShape(16.dp)
+    }
     val d = LocalDensity.current
     CompositionLocalProvider(
         LocalPalette provides p,
+        LocalBtnShape provides btn,
+        LocalBubbleShape provides bubble,
         LocalDensity provides Density(d.density, d.fontScale * prefs.fontScale)
     ) {
         MaterialTheme(
@@ -222,10 +253,14 @@ fun AtlasApp(prefs: Prefs, voice: Voice) {
             brain, prefs, voice,
             onBack = { screen = "chat" },
             onAdvanced = { screen = "advanced" },
+            onPersona = { screen = "persona" },
+            onLook = { screen = "look" },
             onMemory = { memBack = "settings"; screen = "memory" },
             onTutorial = { screen = "tutorial_again" },
             onReset = { brain.wipeAll(); prefs.resetAll(); screen = "lang" }
         )
+        "persona" -> PersonaScreen(prefs) { screen = "settings" }
+        "look" -> LookScreen(prefs, voice) { screen = "settings" }
         "advanced" -> AdvancedScreen(brain, prefs, voice) { screen = "settings" }
         "memory" -> MemoryScreen(brain.memory) { screen = memBack }
         else -> ChatScreen(
@@ -250,12 +285,12 @@ fun LanguageScreen(prefs: Prefs, onDone: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text("Choose your language / Выберите язык", color = C.text, fontSize = 16.sp)
         Spacer(Modifier.height(40.dp))
-        Button(
+        AButton(
             onClick = { prefs.lang = "en"; onDone() },
             modifier = Modifier.fillMaxWidth().height(56.dp)
         ) { Text("English", fontSize = 18.sp) }
         Spacer(Modifier.height(16.dp))
-        Button(
+        AButton(
             onClick = { prefs.lang = "ru"; onDone() },
             modifier = Modifier.fillMaxWidth().height(56.dp)
         ) { Text("Русский", fontSize = 18.sp) }
@@ -298,12 +333,12 @@ fun KeyEditor(value: String, onChange: (String) -> Unit) {
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
+            AOutlinedButton(onClick = {
                 ctx.startActivity(
                     Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/app/apikey"))
                 )
             }) { Text(Tr.s("get_key")) }
-            Button(
+            AButton(
                 enabled = value.isNotBlank() && !checking,
                 onClick = {
                     checking = true
@@ -375,7 +410,7 @@ fun TutorialScreen(prefs: Prefs, firstRun: Boolean, onDone: () -> Unit, onExit: 
                 Text(Tr.s("t${p + 1}b"), color = C.sub, fontSize = 17.sp, lineHeight = 26.sp)
                 if (p == 4) {
                     Spacer(Modifier.height(24.dp))
-                    Button(onClick = {
+                    AButton(onClick = {
                         ctx.startActivity(
                             Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/app/apikey"))
                         )
@@ -398,16 +433,16 @@ fun TutorialScreen(prefs: Prefs, firstRun: Boolean, onDone: () -> Unit, onExit: 
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             if (pager.currentPage > 0) {
-                OutlinedButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }) {
+                AOutlinedButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }) {
                     Text(Tr.s("back"))
                 }
             } else Spacer(Modifier.width(1.dp))
             if (pager.currentPage < TUT - 1) {
-                Button(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }) {
+                AButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }) {
                     Text(Tr.s("next"))
                 }
             } else {
-                Button(onClick = { prefs.key = key; onDone() }) { Text(Tr.s("finish")) }
+                AButton(onClick = { prefs.key = key; onDone() }) { Text(Tr.s("finish")) }
             }
         }
     }
@@ -442,7 +477,7 @@ fun SetupScreen(prefs: Prefs, onDone: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         Text(Tr.s("mode_note"), color = C.sub, fontSize = 13.sp)
         Spacer(Modifier.height(32.dp))
-        Button(
+        AButton(
             onClick = {
                 prefs.name = name.trim()
                 prefs.voiceInput = voiceMode
@@ -458,9 +493,9 @@ fun SetupScreen(prefs: Prefs, onDone: () -> Unit) {
 @Composable
 private fun ModeButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     if (selected) {
-        Button(onClick = onClick, modifier = modifier.height(52.dp)) { Text(label) }
+        AButton(onClick = onClick, modifier = modifier.height(52.dp)) { Text(label) }
     } else {
-        OutlinedButton(onClick = onClick, modifier = modifier.height(52.dp)) { Text(label) }
+        AOutlinedButton(onClick = onClick, modifier = modifier.height(52.dp)) { Text(label) }
     }
 }
 
@@ -756,7 +791,7 @@ fun ChatScreen(
                         } else {
                             Surface(
                                 color = C.panel,
-                                shape = RoundedCornerShape(16.dp),
+                                shape = LocalBubbleShape.current,
                                 modifier = Modifier.widthIn(max = 340.dp)
                             ) {
                                 Column(Modifier.padding(12.dp)) {
@@ -821,7 +856,7 @@ fun ChatScreen(
                         color = C.sub,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                     )
-                    Button(
+                    AButton(
                         onClick = { toggleMic() },
                         shape = CircleShape,
                         modifier = Modifier.size(60.dp),
@@ -960,28 +995,25 @@ private fun ChatsDialog(brain: Brain, onClose: () -> Unit) {
     )
 }
 
-private val MODELS = listOf(
-    Triple("gemini-3.8-flash", "Flash", "model_flash"),
-    Triple("gemini-3.5-flash-lite", "Flash-Lite", "model_lite"),
-    Triple("gemini-3.1-pro-preview", "Pro", "model_pro")
-)
-
 @Composable
 private fun ModelDialog(prefs: Prefs, onClose: () -> Unit) {
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text(Tr.s("model_title")) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MODELS.forEach { (id, _, desc) ->
+            Column(
+                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Models.all.forEach { m ->
                     val modifier = Modifier.fillMaxWidth()
-                    if (prefs.model == id) {
-                        Button(onClick = { prefs.model = id; onClose() }, modifier = modifier) {
-                            Text(Tr.s(desc), fontSize = 13.sp)
+                    if (prefs.model == m.id) {
+                        AButton(onClick = { prefs.model = m.id; onClose() }, modifier = modifier) {
+                            Text(m.name + " — " + Models.desc(m), fontSize = 13.sp)
                         }
                     } else {
-                        OutlinedButton(onClick = { prefs.model = id; onClose() }, modifier = modifier) {
-                            Text(Tr.s(desc), fontSize = 13.sp)
+                        AOutlinedButton(onClick = { prefs.model = m.id; onClose() }, modifier = modifier) {
+                            Text(m.name + " — " + Models.desc(m), fontSize = 13.sp)
                         }
                     }
                 }
@@ -1017,7 +1049,7 @@ private fun Bubble(
     ) {
         if (m.fromUser) {
             Box {
-                val shape = RoundedCornerShape(16.dp)
+                val shape = LocalBubbleShape.current
                 Surface(
                     color = C.user,
                     shape = shape,
@@ -1054,7 +1086,7 @@ private fun Bubble(
             }
         } else {
             Column(Modifier.widthIn(max = 340.dp)) {
-                Surface(color = C.panel, shape = RoundedCornerShape(16.dp)) {
+                Surface(color = C.panel, shape = LocalBubbleShape.current) {
                     Column(Modifier.padding(12.dp)) {
                         if (m.text.isNotBlank()) {
                             val blocks = remember(m.text) { parseBlocks(m.text) }
@@ -1078,7 +1110,7 @@ private fun Bubble(
                 if (m.outFiles.isNotEmpty()) {
                     Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         m.outFiles.forEach { name ->
-                            OutlinedButton(onClick = {
+                            AOutlinedButton(onClick = {
                                 val f = brain.creator.fileOf(name)
                                 if (f.exists()) {
                                     Share.file(ctx, name, Share.mimeFor(name), f.readBytes())
@@ -1173,11 +1205,11 @@ fun MemoryScreen(memory: MemoryStore, onBack: () -> Unit) {
                     }
                 }
             }
-            Button(onClick = { editIdx = -1; editText = "" }, modifier = Modifier.fillMaxWidth()) {
+            AButton(onClick = { editIdx = -1; editText = "" }, modifier = Modifier.fillMaxWidth()) {
                 Text(Tr.s("mem_add"))
             }
             if (memory.items.isNotEmpty()) {
-                OutlinedButton(onClick = { confirmClear = true }, modifier = Modifier.fillMaxWidth()) {
+                AOutlinedButton(onClick = { confirmClear = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(Tr.s("mem_clear"))
                 }
             }
@@ -1228,13 +1260,13 @@ private fun Choice(options: List<Pair<String, String>>, selected: String, onSele
         options.forEach { (value, label) ->
             val modifier = Modifier.weight(1f)
             if (value == selected) {
-                Button(
+                AButton(
                     onClick = { onSelect(value) },
                     modifier = modifier,
                     contentPadding = PaddingValues(horizontal = 4.dp)
                 ) { Text(label, fontSize = 13.sp, maxLines = 1) }
             } else {
-                OutlinedButton(
+                AOutlinedButton(
                     onClick = { onSelect(value) },
                     modifier = modifier,
                     contentPadding = PaddingValues(horizontal = 4.dp)
@@ -1262,6 +1294,8 @@ fun SettingsScreen(
     voice: Voice,
     onBack: () -> Unit,
     onAdvanced: () -> Unit,
+    onPersona: () -> Unit,
+    onLook: () -> Unit,
     onMemory: () -> Unit,
     onTutorial: () -> Unit,
     onReset: () -> Unit
@@ -1322,11 +1356,11 @@ fun SettingsScreen(
             }
             GearRow(Tr.s("s_lang")) {
                 Row {
-                    if (prefs.lang == "en") Button(onClick = {}) { Text("EN") }
-                    else OutlinedButton(onClick = { prefs.lang = "en" }) { Text("EN") }
+                    if (prefs.lang == "en") AButton(onClick = {}) { Text("EN") }
+                    else AOutlinedButton(onClick = { prefs.lang = "en" }) { Text("EN") }
                     Spacer(Modifier.width(8.dp))
-                    if (prefs.lang == "ru") Button(onClick = {}) { Text("RU") }
-                    else OutlinedButton(onClick = { prefs.lang = "ru" }) { Text("RU") }
+                    if (prefs.lang == "ru") AButton(onClick = {}) { Text("RU") }
+                    else AOutlinedButton(onClick = { prefs.lang = "ru" }) { Text("RU") }
                 }
             }
             GearRow(Tr.s("s_name")) {
@@ -1341,6 +1375,8 @@ fun SettingsScreen(
             Spacer(Modifier.height(4.dp))
             Text(Tr.s("s_buttons"), color = C.accent, fontWeight = FontWeight.Bold)
 
+            SettingsButton(Tr.s("b_persona")) { onPersona() }
+            SettingsButton(Tr.s("b_look")) { onLook() }
             SettingsButton(Tr.s("b_adv")) { onAdvanced() }
             SettingsButton(Tr.s("b_mem")) { onMemory() }
             SettingsButton(Tr.s("b_key")) { keyText = prefs.key; keyDialog = true }
@@ -1372,8 +1408,7 @@ fun SettingsScreen(
 @Composable
 fun AdvancedScreen(brain: Brain, prefs: Prefs, voice: Voice, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
-    var voiceMenu by remember { mutableStateOf(false) }
-    val names = remember(Tr.lang) { voice.voiceNames() }
+    var modelDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = C.bg,
@@ -1411,52 +1446,21 @@ fun AdvancedScreen(brain: Brain, prefs: Prefs, voice: Voice, onBack: () -> Unit)
                     prefs.answerLen
                 ) { prefs.answerLen = it }
             }
-            CardColumn(Tr.s("adv_style")) {
-                Choice(
-                    listOf("jarvis" to Tr.s("st_jarvis"), "friendly" to Tr.s("st_friendly"), "formal" to Tr.s("st_formal")),
-                    prefs.style
-                ) { prefs.style = it }
-            }
             CardColumn(Tr.s("adv_model")) {
-                Choice(MODELS.map { it.first to it.second }, prefs.model) { prefs.model = it }
-                val desc = MODELS.firstOrNull { it.first == prefs.model }?.third
-                if (desc != null) Text(Tr.s(desc), color = C.sub, fontSize = 12.sp)
+                val cur = Models.all.firstOrNull { it.id == prefs.model }
+                Text(
+                    if (cur != null) cur.name + " — " + Models.desc(cur) else prefs.model,
+                    color = C.sub,
+                    fontSize = 13.sp
+                )
+                AOutlinedButton(onClick = { modelDialog = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(Tr.s("model_title"))
+                }
             }
             CardColumn(Tr.s("adv_key")) {
                 KeyEditor(prefs.key) { prefs.key = it }
             }
-            CardColumn(Tr.s("adv_rate") + ": " + String.format(Locale.US, "%.1f", prefs.ttsRate) + "x") {
-                Slider(
-                    value = prefs.ttsRate,
-                    onValueChange = { prefs.ttsRate = Math.round(it * 10f) / 10f },
-                    valueRange = 0.5f..2f
-                )
-            }
-            CardColumn(Tr.s("adv_voice")) {
-                Box {
-                    OutlinedButton(onClick = { voiceMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            if (prefs.ttsVoice.isBlank()) Tr.s("voice_default") else prefs.ttsVoice,
-                            maxLines = 1
-                        )
-                    }
-                    DropdownMenu(expanded = voiceMenu, onDismissRequest = { voiceMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(Tr.s("voice_default")) },
-                            onClick = { prefs.ttsVoice = ""; voiceMenu = false }
-                        )
-                        names.forEach { n ->
-                            DropdownMenuItem(
-                                text = { Text(n) },
-                                onClick = { prefs.ttsVoice = n; voiceMenu = false }
-                            )
-                        }
-                    }
-                }
-                OutlinedButton(onClick = { voice.speak(Tr.s("test_phrase")) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(Tr.s("b_test"))
-                }
-            }
+            VoiceCards(prefs, voice)
             CardColumn(Tr.s("adv_theme")) {
                 Choice(
                     listOf("dark" to Tr.s("th_dark"), "light" to Tr.s("th_light"), "system" to Tr.s("th_system")),
@@ -1477,6 +1481,7 @@ fun AdvancedScreen(brain: Brain, prefs: Prefs, voice: Voice, onBack: () -> Unit)
             }
         }
     }
+    if (modelDialog) ModelDialog(prefs) { modelDialog = false }
 }
 
 @Composable
@@ -1493,7 +1498,7 @@ private fun GearRow(label: String, control: @Composable () -> Unit) {
 
 @Composable
 private fun SettingsButton(label: String, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(label) }
+    AOutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text(label) }
 }
 
 // ---------- Блокировка приложения ----------
@@ -1545,6 +1550,237 @@ fun LockScreen(prefs: Prefs) {
         Spacer(Modifier.height(12.dp))
         Text(Tr.s("lock_text"), color = C.sub)
         Spacer(Modifier.height(32.dp))
-        Button(onClick = { prompt() }) { Text(Tr.s("unlock")) }
+        AButton(onClick = { prompt() }) { Text(Tr.s("unlock")) }
+    }
+}
+
+// ---------- Кнопки с настраиваемой формой ----------
+
+@Composable
+private fun AButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    shape: Shape? = null,
+    contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+    colors: ButtonColors = ButtonDefaults.buttonColors(),
+    content: @Composable RowScope.() -> Unit
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = shape ?: LocalBtnShape.current,
+        contentPadding = contentPadding,
+        colors = colors,
+        content = content
+    )
+}
+
+@Composable
+private fun AOutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+    content: @Composable RowScope.() -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = LocalBtnShape.current,
+        contentPadding = contentPadding,
+        content = content
+    )
+}
+
+// ---------- Голос (общий блок для «Внешний вид и голос» и «Дополнительно») ----------
+
+@Composable
+private fun VoiceCards(prefs: Prefs, voice: Voice) {
+    var voiceMenu by remember { mutableStateOf(false) }
+    val names = remember(Tr.lang) { voice.voiceNames() }
+    CardColumn(Tr.s("adv_rate") + ": " + String.format(Locale.US, "%.1f", prefs.ttsRate) + "x") {
+        Slider(
+            value = prefs.ttsRate,
+            onValueChange = { prefs.ttsRate = Math.round(it * 10f) / 10f },
+            valueRange = 0.5f..2f
+        )
+    }
+    CardColumn(Tr.s("adv_voice")) {
+        Box {
+            AOutlinedButton(onClick = { voiceMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (prefs.ttsVoice.isBlank()) Tr.s("voice_default") else prefs.ttsVoice, maxLines = 1)
+            }
+            DropdownMenu(expanded = voiceMenu, onDismissRequest = { voiceMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text(Tr.s("voice_default")) },
+                    onClick = { prefs.ttsVoice = ""; voiceMenu = false }
+                )
+                names.forEach { n ->
+                    DropdownMenuItem(
+                        text = { Text(n) },
+                        onClick = { prefs.ttsVoice = n; voiceMenu = false }
+                    )
+                }
+            }
+        }
+        AOutlinedButton(onClick = { voice.speak(Tr.s("test_phrase")) }, modifier = Modifier.fillMaxWidth()) {
+            Text(Tr.s("b_test"))
+        }
+    }
+}
+
+// ---------- Характер и стиль речи ----------
+
+@Composable
+private fun ChipGrid(options: List<Opt>, selected: List<String>, max: Int, onChange: (List<String>) -> Unit) {
+    val ctx = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.chunked(2).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                row.forEach { o ->
+                    val on = o.id in selected
+                    val toggle = {
+                        if (on) {
+                            onChange(selected - o.id)
+                        } else if (selected.size < max) {
+                            onChange(selected + o.id)
+                        } else {
+                            Toast.makeText(ctx, String.format(Tr.s("persona_max"), max), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    if (on) {
+                        AButton(
+                            onClick = toggle,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) { Text(o.label(), fontSize = 13.sp, maxLines = 1) }
+                    } else {
+                        AOutlinedButton(
+                            onClick = toggle,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) { Text(o.label(), fontSize = 13.sp, maxLines = 1) }
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PersonaScreen(prefs: Prefs, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val traits = Persona.ids(prefs.traits)
+    val styles = Persona.ids(prefs.speech)
+    Scaffold(
+        containerColor = C.bg,
+        topBar = {
+            TopAppBar(
+                title = { Text(Tr.s("b_persona"), color = C.text) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = C.bg),
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = C.text)
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        Column(
+            Modifier.padding(pad).fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            CardColumn(Tr.s("persona_traits") + " (" + traits.size + "/" + Persona.MAX_TRAITS + ")") {
+                ChipGrid(Persona.traits, traits, Persona.MAX_TRAITS) { prefs.traits = it.joinToString(",") }
+            }
+            CardColumn(Tr.s("persona_styles") + " (" + styles.size + "/" + Persona.MAX_STYLES + ")") {
+                ChipGrid(Persona.styles, styles, Persona.MAX_STYLES) { prefs.speech = it.joinToString(",") }
+            }
+            AOutlinedButton(
+                onClick = { prefs.traits = ""; prefs.speech = "" },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(Tr.s("persona_reset")) }
+        }
+    }
+}
+
+// ---------- Внешний вид и голос ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LookScreen(prefs: Prefs, voice: Voice, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val shapes = listOf("round" to Tr.s("sh_round"), "soft" to Tr.s("sh_soft"), "square" to Tr.s("sh_square"))
+    Scaffold(
+        containerColor = C.bg,
+        topBar = {
+            TopAppBar(
+                title = { Text(Tr.s("b_look"), color = C.text) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = C.bg),
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = C.text)
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        Column(
+            Modifier.padding(pad).fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            GearRow(Tr.s("s_lang")) {
+                Row {
+                    if (prefs.lang == "en") AButton(onClick = {}) { Text("EN") }
+                    else AOutlinedButton(onClick = { prefs.lang = "en" }) { Text("EN") }
+                    Spacer(Modifier.width(8.dp))
+                    if (prefs.lang == "ru") AButton(onClick = {}) { Text("RU") }
+                    else AOutlinedButton(onClick = { prefs.lang = "ru" }) { Text("RU") }
+                }
+            }
+            CardColumn(Tr.s("adv_theme")) {
+                Choice(
+                    listOf("dark" to Tr.s("th_dark"), "light" to Tr.s("th_light"), "system" to Tr.s("th_system")),
+                    prefs.theme
+                ) { prefs.theme = it }
+            }
+            CardColumn(Tr.s("look_accent") + ": " + Persona.accent(prefs.accent).label()) {
+                Persona.accents.chunked(4).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        row.forEach { ac ->
+                            Box(
+                                Modifier.size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(ac.dark)
+                                    .then(
+                                        if (prefs.accent == ac.id) Modifier.border(3.dp, C.text, CircleShape)
+                                        else Modifier
+                                    )
+                                    .clickable { prefs.accent = ac.id }
+                            )
+                        }
+                    }
+                }
+            }
+            CardColumn(Tr.s("look_buttons")) {
+                Choice(shapes, prefs.btnShape) { prefs.btnShape = it }
+            }
+            CardColumn(Tr.s("look_bubbles")) {
+                Choice(shapes, prefs.bubbleShape) { prefs.bubbleShape = it }
+            }
+            CardColumn(Tr.s("adv_font")) {
+                Choice(
+                    listOf("0.85" to "S", "1.0" to "M", "1.15" to "L", "1.3" to "XL", "1.5" to "XXL"),
+                    prefs.fontScale.toString()
+                ) { prefs.fontScale = it.toFloat() }
+                Text(Tr.s("look_sample"), color = C.text)
+            }
+            VoiceCards(prefs, voice)
+        }
     }
 }

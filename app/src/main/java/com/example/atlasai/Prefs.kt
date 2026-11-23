@@ -32,17 +32,16 @@ class Prefs(ctx: Context) {
     private var _handsFree by mutableStateOf(sp.getBoolean("handsFree", false))
     private var _appLock by mutableStateOf(sp.getBoolean("appLock", false))
     private var _encryptChats by mutableStateOf(sp.getBoolean("encryptChats", true))
+    private var _traits by mutableStateOf(sp.getString("traits", "") ?: "")
+    private var _speech by mutableStateOf(sp.getString("speech", "") ?: "")
+    private var _accent by mutableStateOf(sp.getString("accent", "cyan") ?: "cyan")
+    private var _btnShape by mutableStateOf(sp.getString("btnShape", "round") ?: "round")
+    private var _bubbleShape by mutableStateOf(sp.getString("bubbleShape", "soft") ?: "soft")
 
     /** Старые сохранённые модели (2.x) Google закрыл для новых пользователей — переносим на актуальные. */
     private fun loadModel(): String {
         val m = sp.getString("model", "") ?: ""
-        return when {
-            m.isBlank() -> "gemini-3.8-flash"
-            m == "gemini-2.5-flash-lite" -> "gemini-3.5-flash-lite"
-            m == "gemini-2.5-pro" -> "gemini-3.1-pro-preview"
-            m.startsWith("gemini-2") -> "gemini-3.8-flash"
-            else -> m
-        }
+        return if (Models.all.any { it.id == m }) m else Models.DEFAULT
     }
 
     /** Ключ хранится только в зашифрованном виде (Android Keystore). Старый открытый ключ переносится. */
@@ -211,6 +210,46 @@ class Prefs(ctx: Context) {
             sp.edit().putBoolean("encryptChats", v).apply()
         }
 
+    /** Черты характера Атласа: id через запятую, не больше 4. */
+    var traits: String
+        get() = _traits
+        set(v) {
+            _traits = v
+            sp.edit().putString("traits", v).apply()
+        }
+
+    /** Стили речи Атласа: id через запятую, не больше 3. */
+    var speech: String
+        get() = _speech
+        set(v) {
+            _speech = v
+            sp.edit().putString("speech", v).apply()
+        }
+
+    /** Цвет акцента: cyan, blue, green, purple, pink, orange, red, yellow. */
+    var accent: String
+        get() = _accent
+        set(v) {
+            _accent = v
+            sp.edit().putString("accent", v).apply()
+        }
+
+    /** Форма кнопок: round | soft | square. */
+    var btnShape: String
+        get() = _btnShape
+        set(v) {
+            _btnShape = v
+            sp.edit().putString("btnShape", v).apply()
+        }
+
+    /** Форма сообщений: round | soft | square. */
+    var bubbleShape: String
+        get() = _bubbleShape
+        set(v) {
+            _bubbleShape = v
+            sp.edit().putString("bubbleShape", v).apply()
+        }
+
     var lastChat: String
         get() = sp.getString("lastChat", "") ?: ""
         set(v) {
@@ -235,5 +274,6 @@ class Prefs(ctx: Context) {
         _search = "auto"; _model = "gemini-3.8-flash"; _len = "normal"; _style = "jarvis"
         _rate = 1f; _ttsVoice = ""; _theme = "dark"; _fontScale = 1f; _autoDelete = 0
         _streaming = true; _handsFree = false; _appLock = false; _encryptChats = true
+        _traits = ""; _speech = ""; _accent = "cyan"; _btnShape = "round"; _bubbleShape = "soft"
     }
 }
