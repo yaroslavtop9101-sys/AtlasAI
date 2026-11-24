@@ -292,18 +292,22 @@ class Brain(
     private fun askModel(text: String, atts: List<Gemini.Attachment>, history: List<Msg>): Gemini.Result {
         val order = Models.fallbackOrder(prefs.model)
         var last: ApiException? = null
+        val log = StringBuilder()
         for (m in order) {
             try {
                 return attempt(m, text, atts, history)
             } catch (e: ApiException) {
                 last = e
+                log.append("• ").append(m).append(": ")
+                    .append(e.message.orEmpty().replace("\n", " ").take(220)).append("\n")
                 val msg = e.message.orEmpty().lowercase()
                 val retryable = e.code == 429 || e.code == 404 || e.code == 500 || e.code == 503 ||
                     msg.contains("no longer available")
                 if (!retryable) throw e
             }
         }
-        throw last ?: ApiException("error")
+        val l = last ?: ApiException("error")
+        throw ApiException(l.message.orEmpty(), l.code, log.toString().trim())
     }
 
     private fun attempt(
@@ -362,12 +366,16 @@ class Brain(
         return " " + String.format(Tr.s("retry_in"), t.replace(Regex("\\.[0-9]+"), ""))
     }
 
+    /** Что именно ответил Google по каждой модели: так видно, какой лимит исчерпан. */
+    private fun detailsOf(e: ApiException): String =
+        if (e.details.isBlank()) "" else "\n\n" + Tr.s("details") + ":\n" + e.details
+
     private fun friendly(e: ApiException): String {
         val m = e.message.orEmpty()
         val low = m.lowercase()
         return when {
-            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free") + retryHint(m)
-            e.code == 429 || low.contains("quota") -> Tr.s("err_quota") + retryHint(m)
+            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free") + retryHint(m) + detailsOf(e)
+            e.code == 429 || low.contains("quota") -> Tr.s("err_quota") + retryHint(m) + detailsOf(e)
             e.code == 401 || e.code == 403 || low.contains("api key") -> Tr.s("err_key")
             low.contains("mime") -> Tr.s("err_mime")
             low.contains("no longer available") || e.code == 404 -> Tr.s("err_model")

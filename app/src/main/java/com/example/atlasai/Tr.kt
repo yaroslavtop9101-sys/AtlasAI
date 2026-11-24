@@ -204,6 +204,7 @@ object Tr {
         "sh_square" to ("Square" to "Прямые"),
         "look_sample" to ("This is how the text looks." to "Так выглядит текст."),
         "retry_in" to ("Google suggests retrying in %s." to "Google предлагает повторить через %s."),
+        "details" to ("Details from Google" to "Подробности от Google"),
         "t1t" to ("Meet Atlas" to "Знакомьтесь: Атлас"),
         "t1b" to ("I am Atlas, your personal AI assistant in the spirit of J.A.R.V.I.S. I talk with you, answer questions and operate your phone. This tutorial has 20 short steps and cannot be skipped, because it covers everything I can do." to "Я Атлас, ваш личный ИИ-ассистент в духе Джарвиса. Я общаюсь с вами, отвечаю на вопросы и управляю телефоном. В этом обучении 20 коротких шагов, его нельзя пропустить: в нём всё, что я умею."),
         "t2t" to ("What I can do" to "Что я умею"),
