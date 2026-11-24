@@ -12,7 +12,11 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.1"
+        // локальная модель работает на 64-битных ARM (все современные планшеты и телефоны)
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -51,4 +55,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // локальная модель Gemma (MediaPipe LLM Inference)
+    implementation("com.google.mediapipe:tasks-genai:0.10.24")
 }

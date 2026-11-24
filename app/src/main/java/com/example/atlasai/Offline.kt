@@ -21,6 +21,36 @@ object Offline {
         if (v == Math.floor(v) && Math.abs(v) < 1e12) v.toLong().toString()
         else String.format(Locale.US, "%.4f", v).trimEnd('0').trimEnd('.')
 
+    /** Точные ответы без модели: простая математика, время и дата (только в коротких фразах). */
+    fun quick(q: String): String? {
+        val ru = Tr.ru
+        val t = q.lowercase().trim()
+        if (t.length > 60) return null
+        val loc = if (ru) Locale("ru") else Locale.US
+        val now = Date()
+        if (!Regex("\\d+-\\d+-\\d+").containsMatchIn(t)) {
+            val m = Regex("(-?\\d+(?:[.,]\\d+)?)\\s*([+\\-*/x×÷])\\s*(-?\\d+(?:[.,]\\d+)?)").find(t)
+            if (m != null) {
+                val a = m.groupValues[1].replace(',', '.').toDouble()
+                val b = m.groupValues[3].replace(',', '.').toDouble()
+                val r = when (m.groupValues[2]) {
+                    "+" -> a + b
+                    "-" -> a - b
+                    "*", "x", "×" -> a * b
+                    else -> if (b == 0.0) return if (ru) "На ноль делить нельзя." else "Division by zero is not permitted." else a / b
+                }
+                return (if (ru) "Получается " else "That comes to ") + fmt(r) + "."
+            }
+        }
+        if (Regex("(который час|сколько времени|what time|current time)").containsMatchIn(t)) {
+            return (if (ru) "Сейчас " else "It is ") + SimpleDateFormat("HH:mm", loc).format(now) + "."
+        }
+        if (Regex("(какое число|какая дата|какой сегодня день|what date|today's date|what day)").containsMatchIn(t)) {
+            return SimpleDateFormat("EEEE, d MMMM yyyy", loc).format(now)
+        }
+        return null
+    }
+
     fun reply(q: String, name: String): String {
         val ru = Tr.ru
         val t = q.lowercase().trim()

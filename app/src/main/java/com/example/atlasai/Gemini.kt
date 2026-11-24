@@ -10,7 +10,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** Ошибка, которую вернул сам API (неверный ключ, лимит и т.п.). [code] — HTTP-код, 0 если неизвестен. */
-class ApiException(message: String, val code: Int = 0, val details: String = "") : Exception(message)
+class ApiException(message: String, val code: Int = 0) : Exception(message)
 
 /** Источник из поиска Google. */
 class WebSource(val title: String, val url: String)

@@ -65,6 +65,8 @@ class Brain(
     private val actions = Actions(ctx)
     private val tools = Tools(prefs, actions, creator)
 
+    private val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
+
     init {
         if (prefs.autoDeleteDays > 0) chats.purge(prefs.autoDeleteDays, prefs.lastChat)
         val last = prefs.lastChat
@@ -253,6 +255,10 @@ class Brain(
         val noNet = { Msg(false, Tr.s(if (prefs.internet) "need_net" else "net_off"), silent = true) }
         val offlineAnswer = { Msg(false, Offline.reply(text, prefs.name)) }
         try {
+            // локальная модель (без вложений): телефон по правилам, ответы модели, поиск DuckDuckGo
+            if (uris.isEmpty() && prefs.useLocal && LocalLlm.ready(ctx)) {
+                return computeLocal(text, history, on)
+            }
             if (!modelPath) {
                 // без интернета или без ключа работают простые правила (с защитой от «не», «без», «don't»)
                 if (uris.isEmpty()) {
@@ -288,26 +294,91 @@ class Brain(
         }
     }
 
+    /** Ответ локальной модели. Команды телефона и точные вещи идут по правилам, остальное решает модель. */
+    private fun computeLocal(text: String, history: List<Msg>, on: Boolean): Msg {
+        actions.tryHandle(text)?.let { return Msg(false, it) }
+        if (actions.isImageRequest(text.lowercase())) return Msg(false, Tr.s("local_no_image"), silent = true)
+        Offline.quick(text)?.let { return Msg(false, it) }
+
+        var hits: List<WebSearch.Hit> = emptyList()
+        var searched = false
+        val wantSearch = prefs.searchMode == "always" || WebSearch.needsSearch(text)
+        if (on && prefs.searchMode != "off" && wantSearch) {
+            searched = true
+            hits = try {
+                WebSearch.search(text)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        val prompt = LocalLlm.buildPrompt(localSystem(), history, text, hits, searched)
+        val answer = try {
+            LocalLlm.generate(ctx, prompt)
+        } catch (e: Throwable) {
+            return Msg(false, Tr.s("error") + " " + (e.message ?: e.javaClass.simpleName).take(200), silent = true)
+        }
+        val sources = hits.filter { it.url.isNotBlank() }.map { WebSource(it.title, it.url) }
+        return Msg(false, answer.ifBlank { Tr.s("tool_bad") }, sources = sources)
+    }
+
+    private fun localSystem(): String {
+        val name = prefs.name.ifBlank { "the user" }
+        val language = if (Tr.ru) "Russian" else "English"
+        val len = when (prefs.answerLen) {
+            "short" -> "Answer in one or two sentences."
+            "long" -> "Answer in detail when the topic needs it."
+            else -> "Answer briefly, in at most four sentences."
+        }
+        val mem = if (memory.items.isEmpty()) "" else
+            " Facts the user asked you to remember: " + memory.items.joinToString("; ").take(300) + "."
+        return "You are ATLAS, a polite, calm personal assistant in the style of J.A.R.V.I.S. " +
+            "Address the user by name: $name. Reply only in $language. $len " +
+            "Do not use markdown or emoji. Never invent facts, numbers or links; if you do not know, say so." + mem
+    }
+
+    /** Копирует выбранный файл модели в память приложения (команда /local). */
+    fun importLocalModel(uri: Uri) {
+        if (busy) return
+        busy = true
+        note(Tr.s("local_importing"))
+        scope.launch {
+            var ok = false
+            val msg = withContext(Dispatchers.IO) {
+                try {
+                    LocalLlm.importModel(ctx, uri)
+                    ok = true
+                    Tr.s("local_done")
+                } catch (e: Throwable) {
+                    Tr.s("error") + " " + (e.message ?: e.javaClass.simpleName).take(160)
+                }
+            }
+            busy = false
+            if (ok) prefs.useLocal = true
+            note(msg)
+        }
+    }
+
+    fun removeLocalModel() {
+        LocalLlm.delete(ctx)
+        note(Tr.s("local_deleted"))
+    }
+
     /** Спрашивает выбранную модель; если у неё лимит или она недоступна, пробует запасные. */
     private fun askModel(text: String, atts: List<Gemini.Attachment>, history: List<Msg>): Gemini.Result {
-        val order = Models.fallbackOrder(prefs.model)
+        val order = listOf(prefs.model) + fallbackModels.filter { it != prefs.model }
         var last: ApiException? = null
-        val log = StringBuilder()
         for (m in order) {
             try {
                 return attempt(m, text, atts, history)
             } catch (e: ApiException) {
                 last = e
-                log.append("• ").append(m).append(": ")
-                    .append(e.message.orEmpty().replace("\n", " ").take(220)).append("\n")
                 val msg = e.message.orEmpty().lowercase()
                 val retryable = e.code == 429 || e.code == 404 || e.code == 500 || e.code == 503 ||
                     msg.contains("no longer available")
                 if (!retryable) throw e
             }
         }
-        val l = last ?: ApiException("error")
-        throw ApiException(l.message.orEmpty(), l.code, log.toString().trim())
+        throw last ?: ApiException("error")
     }
 
     private fun attempt(
@@ -360,22 +431,12 @@ class Brain(
         )
     }
 
-    /** Google иногда пишет, через сколько повторить («retry in 12h55m45s»). */
-    private fun retryHint(m: String): String {
-        val t = Regex("retry in ([0-9hm]*[0-9.]+s)").find(m)?.groupValues?.get(1) ?: return ""
-        return " " + String.format(Tr.s("retry_in"), t.replace(Regex("\\.[0-9]+"), ""))
-    }
-
-    /** Что именно ответил Google по каждой модели: так видно, какой лимит исчерпан. */
-    private fun detailsOf(e: ApiException): String =
-        if (e.details.isBlank()) "" else "\n\n" + Tr.s("details") + ":\n" + e.details
-
     private fun friendly(e: ApiException): String {
         val m = e.message.orEmpty()
         val low = m.lowercase()
         return when {
-            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free") + retryHint(m) + detailsOf(e)
-            e.code == 429 || low.contains("quota") -> Tr.s("err_quota") + retryHint(m) + detailsOf(e)
+            e.code == 429 && low.contains("limit: 0") -> Tr.s("err_free")
+            e.code == 429 || low.contains("quota") -> Tr.s("err_quota")
             e.code == 401 || e.code == 403 || low.contains("api key") -> Tr.s("err_key")
             low.contains("mime") -> Tr.s("err_mime")
             low.contains("no longer available") || e.code == 404 -> Tr.s("err_model")
@@ -391,13 +452,10 @@ class Brain(
             "long" -> "Give detailed, thorough answers when the topic needs it."
             else -> "Keep answers concise and conversational."
         }
-        val traits = Persona.prompts(Persona.traits, prefs.traits)
-        val speech = Persona.prompts(Persona.styles, prefs.speech)
-        val style = if (traits.isEmpty() && speech.isEmpty()) {
-            "Be polite, witty, calm, with light dry humour."
-        } else {
-            (if (traits.isNotEmpty()) "Your character: " + traits.joinToString(", ") + ". " else "") +
-                (if (speech.isNotEmpty()) "Your speech style: " + speech.joinToString(", ") + "." else "")
+        val style = when (prefs.style) {
+            "friendly" -> "Be warm, friendly and casual."
+            "formal" -> "Be strictly formal and businesslike, without jokes."
+            else -> "Be polite, witty, calm, with light dry humour."
         }
         val search = when {
             prefs.searchMode == "off" ->
